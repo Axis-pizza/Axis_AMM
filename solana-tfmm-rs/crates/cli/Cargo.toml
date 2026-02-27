@@ -8,6 +8,7 @@ authors.workspace = true
 anyhow.workspace = true
 clap.workspace = true
 dotenv.workspace = true
+csv.workspace = true
 
 tfmm-core = { path = "../core" }
 tfmm-sim = { path = "../sim" }

@@ -1,47 +1,55 @@
 use anyhow::Result;
+use std::fmt;
 
-/// 1スロット観測結果（最小）
+// =========================
+// Core config / enums
+// =========================
+
 #[derive(Debug, Clone)]
-pub struct SlotObservation {
-    pub slot: usize,
-    pub ext_price: f64,
-    pub pre_pool_price: f64,
-    pub post_pool_price: f64,
-    pub pre_drift_abs_sum: f64,
-    pub post_drift_abs_sum: f64,
-    pub arb_fired: bool,
-    pub arb_gross_usd: f64,
-    pub arb_net_usd: f64,
-    pub edge_bps_pre: f64,
-    pub threshold_bps_used: f64,
+pub enum AuctionMode {
+    /// 従来: 誰でも同じ条件で裁定
+    Vanilla,
+
+    /// PFDA: 勝者が一定期間だけ実効コスト優位
+    PfdaWindowed(PfdaParams),
 }
 
-/// 集計結果
 #[derive(Debug, Clone)]
-pub struct SimSummary {
-    pub label: String,
-    pub slots: usize,
-    pub arb_count: usize,
-    pub arb_rate: f64,
-    pub avg_slots_between_arb: f64,
-    pub median_slots_between_arb: f64,
-    pub mean_drift_pre: f64,
-    pub mean_drift_post: f64,
-    pub total_arb_gross_usd: f64,
-    pub total_arb_net_usd: f64,
-    pub avg_extraction_per_arb: f64,
-    pub avg_net_per_arb: f64,
-    pub mean_edge_bps_when_arb: f64,
-    pub mean_threshold_bps_used: f64,
+pub struct PfdaParams {
+    /// 1ウィンドウの長さ（slot数）
+    pub window_slots: usize,
+
+    /// winnerの protocol fee discount (bps)
+    /// 例: 2.0 bps
+    pub fee_discount_bps: f64,
+
+    /// オークション収入モデル（簡易）
+    pub auction_payment_mode: AuctionPaymentMode,
+
+    /// 競争度（0~1）
+    /// 1.0 = 勝者の期待超過利益をほぼ全額 protocol に返す想定
+    pub auction_competitiveness_alpha: f64,
 }
 
-/// 閾値モード
+#[derive(Debug, Clone)]
+pub enum AuctionPaymentMode {
+    /// auction収入なし（差分影響だけ見たいとき）
+    None,
+
+    /// 勝者の実現超過利益の alpha を protocol revenue とみなす
+    RealizedExcessShare,
+
+    /// 勝者の期待超過利益を固定proxyで課金（slot配賦は簡易）
+    FixedPerWindowUsd(f64),
+}
+
 #[derive(Debug, Clone)]
 pub enum ThresholdMode {
-    /// 固定閾値（例: 2.5bps）
-    Fixed(f64),
-    /// 分位点ミックス（20/60/20）
-    QuantileMixture {
+    /// 固定閾値（bps）
+    FixedBps(f64),
+
+    /// mixture threshold（例: 20/60/20）
+    MixtureBps {
         low_bps: f64,
         base_bps: f64,
         high_bps: f64,
@@ -51,412 +59,785 @@ pub enum ThresholdMode {
     },
 }
 
-impl ThresholdMode {
-    pub fn describe(&self) -> String {
-        match self {
-            ThresholdMode::Fixed(v) => format!("Fixed({:.2}bps)", v),
-            ThresholdMode::QuantileMixture {
-                low_bps,
-                base_bps,
-                high_bps,
-                w_low,
-                w_base,
-                w_high,
-            } => format!(
-                "Mixture[{:.0}%:{:.1}bps, {:.0}%:{:.1}bps, {:.0}%:{:.1}bps]",
-                w_low * 100.0,
-                low_bps,
-                w_base * 100.0,
-                base_bps,
-                w_high * 100.0,
-                high_bps
-            ),
+#[derive(Debug, Clone)]
+pub enum CostMode {
+    /// 固定コスト（USD）
+    FixedUsd(f64),
+
+    /// mixture cost proxy
+    MixtureUsd {
+        low_usd: f64,
+        base_usd: f64,
+        high_usd: f64,
+        w_low: f64,
+        w_base: f64,
+        w_high: f64,
+    },
+}
+
+#[derive(Debug, Clone)]
+pub struct SimulationConfig {
+    // horizon
+    pub slots: usize,
+    pub dt_seconds: f64,
+
+    // pool / sizing
+    pub tvl_usd: f64,
+    pub rebalance_notional_usd: f64,
+
+    // synthetic price path
+    pub sigma_annual: f64,
+    pub drift_annual: f64,
+    pub seed: u64,
+
+    // TFMM / drift generation simplification
+    /// slotごとの target shift が pool price に与える基本押し出し量（log-price proxy）
+    pub weight_shift_push_per_slot: f64,
+
+    /// arb後にどの程度 drift を残すか（0=完全修正, 0.5=半分残す）
+    pub post_trade_residual_ratio: f64,
+
+    // arbitrage policy
+    pub threshold_mode: ThresholdMode,
+    pub cost_mode: CostMode,
+    pub auction_mode: AuctionMode,
+}
+
+impl Default for SimulationConfig {
+    fn default() -> Self {
+        Self {
+            slots: 1200,
+            dt_seconds: 0.4,
+            tvl_usd: 100_000.0,
+            rebalance_notional_usd: 500.0,
+            sigma_annual: 0.80,
+            drift_annual: 0.0,
+            seed: 42,
+            weight_shift_push_per_slot: 0.00012,
+            post_trade_residual_ratio: 0.50,
+            threshold_mode: ThresholdMode::FixedBps(2.5),
+            cost_mode: CostMode::FixedUsd(0.10),
+            auction_mode: AuctionMode::Vanilla,
+        }
+    }
+}
+
+// =========================
+// Runtime state
+// =========================
+
+#[derive(Debug, Clone)]
+pub struct WindowState {
+    pub window_index: usize,
+    pub winner_active: bool,
+    pub winner_threshold_discount_bps: f64,
+    pub winner_cost_discount_usd: f64,
+}
+
+impl Default for WindowState {
+    fn default() -> Self {
+        Self {
+            window_index: 0,
+            winner_active: false,
+            winner_threshold_discount_bps: 0.0,
+            winner_cost_discount_usd: 0.0,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct SlotObservation {
+    pub slot: usize,
+    pub ext_price: f64,
+    pub pool_price_pre: f64,
+    pub pool_price_post: f64,
+
+    pub drift_pre_abs: f64,
+    pub drift_post_abs: f64,
+
+    pub arb_fired: bool,
+    pub edge_bps: f64,
+
+    pub threshold_bps_used: f64,
+    pub cost_usd_used: f64,
+
+    pub gross_extraction_usd: f64,
+    pub net_extraction_usd: f64,
+
+    // PFDA-related
+    pub pfda_winner_active: bool,
+    pub protocol_revenue_usd: f64,
+    pub validator_searcher_revenue_usd: f64,
+    pub lp_loss_proxy_usd: f64,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct RevenueBreakdown {
+    pub protocol_revenue_usd: f64,
+    pub validator_searcher_revenue_usd: f64,
+    pub arb_net_revenue_usd: f64,
+    pub lp_loss_proxy_usd: f64, // >0 を「LPから流出した価値」として扱う
+}
+
+#[derive(Debug, Clone)]
+pub struct SimulationSummary {
+    pub label: String,
+
+    pub slots: usize,
+    pub arb_count: usize,
+    pub arb_rate: f64,
+    pub avg_slots_between_arb: f64,
+    pub median_slots_between_arb: f64,
+
+    pub mean_drift_pre: f64,
+    pub mean_drift_post: f64,
+    pub max_drift_pre: f64,
+    pub max_drift_post: f64,
+
+    pub total_arb_gross_usd: f64,
+    pub total_arb_net_usd: f64,
+    pub avg_extraction_per_arb: f64,
+    pub avg_net_per_arb: f64,
+
+    pub mean_edge_bps_when_arb: f64,
+    pub mean_threshold_bps_used: f64,
+    pub mean_cost_usd_used: f64,
+
+    // PFDA metrics
+    pub total_protocol_revenue_usd: f64,
+    pub total_validator_searcher_revenue_usd: f64,
+    pub total_lp_loss_proxy_usd: f64,
+
+    pub lvr_proxy_usd: f64,
+    pub lvr_proxy_ratio: f64, // vs TVL
+}
+
+impl fmt::Display for SimulationSummary {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(f, "label                  : {}", self.label)?;
+        writeln!(f, "slots                  : {}", self.slots)?;
+        writeln!(f, "arb_count              : {}", self.arb_count)?;
+        writeln!(f, "arb_rate               : {:.4} ({:.2}%)", self.arb_rate, self.arb_rate * 100.0)?;
+        writeln!(f, "avg_slots_between_arb  : {:.2}", self.avg_slots_between_arb)?;
+        writeln!(f, "median_slots_between_arb: {:.2}", self.median_slots_between_arb)?;
+        writeln!(f, "mean_drift_pre         : {:.6}", self.mean_drift_pre)?;
+        writeln!(f, "mean_drift_post        : {:.6}", self.mean_drift_post)?;
+        writeln!(f, "max_drift_pre          : {:.6}", self.max_drift_pre)?;
+        writeln!(f, "max_drift_post         : {:.6}", self.max_drift_post)?;
+        writeln!(f, "total_arb_gross_usd    : {:.4}", self.total_arb_gross_usd)?;
+        writeln!(f, "total_arb_net_usd      : {:.4}", self.total_arb_net_usd)?;
+        writeln!(f, "avg_extraction_per_arb : {:.4}", self.avg_extraction_per_arb)?;
+        writeln!(f, "avg_net_per_arb        : {:.4}", self.avg_net_per_arb)?;
+        writeln!(f, "mean_edge_bps_when_arb : {:.4}", self.mean_edge_bps_when_arb)?;
+        writeln!(f, "mean_threshold_bps_used: {:.4}", self.mean_threshold_bps_used)?;
+        writeln!(f, "mean_cost_usd_used     : {:.6}", self.mean_cost_usd_used)?;
+        writeln!(f, "total_protocol_revenue_usd          : {:.4}", self.total_protocol_revenue_usd)?;
+        writeln!(f, "total_validator_searcher_revenue_usd: {:.4}", self.total_validator_searcher_revenue_usd)?;
+        writeln!(f, "total_lp_loss_proxy_usd             : {:.4}", self.total_lp_loss_proxy_usd)?;
+        writeln!(f, "lvr_proxy_usd           : {:.4}", self.lvr_proxy_usd)?;
+        writeln!(f, "lvr_proxy_ratio         : {:.6}", self.lvr_proxy_ratio)
+    }
+}
+
+
+// =========================
+// Public entrypoint
+// =========================
+
+pub fn run_simulation(
+    config: &SimulationConfig,
+    label: impl Into<String>,
+) -> Result<(SimulationSummary, Vec<SlotObservation>)> {
+    let label = label.into();
+
+    let mut rng = SmallRng::new(config.seed);
+
+    let mut ext_price = 1.0_f64;
+    let mut pool_price = 1.0_f64;
+
+    let mut obs = Vec::with_capacity(config.slots);
+
+    let mut last_arb_slot: Option<usize> = None;
+    let mut gaps: Vec<usize> = Vec::new();
+
+    let mut arb_count = 0usize;
+    let mut sum_drift_pre = 0.0;
+    let mut sum_drift_post = 0.0;
+    let mut max_drift_pre: f64 = 0.0;
+    let mut max_drift_post: f64 = 0.0;
+
+    let mut total_gross = 0.0;
+    let mut total_net = 0.0;
+    let mut sum_edge_bps_when_arb = 0.0;
+    let mut sum_threshold_bps_used = 0.0;
+    let mut sum_cost_usd_used = 0.0;
+
+    let mut revenue = RevenueBreakdown::default();
+
+    let mut window_state = WindowState::default();
+
+    for slot in 0..config.slots {
+        update_window_state(slot, config, &mut window_state);
+
+        // 1) 外部価格更新（簡易GBM近似）
+        let ret = sample_log_return_per_slot(config, &mut rng);
+        ext_price *= ret.exp();
+
+        // 2) TFMMのtarget shiftによる pool implied price押し出し（簡易）
+        let pool_price_pre = pool_price * (config.weight_shift_push_per_slot).exp();
+
+        // 3) edge / drift 計算
+        let drift_pre_abs = relative_diff(pool_price_pre, ext_price);
+        let edge_bps = drift_pre_abs * 10_000.0;
+
+        // 4) 発火閾値 / コスト
+        let base_threshold_bps = sample_threshold_bps(&config.threshold_mode, &mut rng);
+        let base_cost_usd = sample_cost_usd(&config.cost_mode, &mut rng);
+
+        let (threshold_bps_used, cost_usd_used, winner_active) =
+            effective_arb_terms(base_threshold_bps, base_cost_usd, config, &window_state);
+
+        // 5) 裁定発火判定
+        let arb_fired = edge_bps >= threshold_bps_used;
+
+        let mut pool_price_post = pool_price_pre;
+        let mut gross_extraction_usd = 0.0;
+        let mut net_extraction_usd = 0.0;
+        let mut protocol_revenue_usd = 0.0;
+        let mut validator_searcher_revenue_usd = 0.0;
+        let mut lp_loss_proxy_usd = 0.0;
+
+        if arb_fired {
+            arb_count += 1;
+
+            if let Some(prev) = last_arb_slot {
+                gaps.push(slot - prev);
+            }
+            last_arb_slot = Some(slot);
+
+            // 6) 裁定後の pool price (部分修正)
+            let log_pool_pre = pool_price_pre.ln();
+            let log_ext = ext_price.ln();
+            let residual = config.post_trade_residual_ratio.clamp(0.0, 1.0);
+            let log_pool_post = log_ext + (log_pool_pre - log_ext) * residual;
+            pool_price_post = log_pool_post.exp();
+
+            // 7) 収益 proxy
+            gross_extraction_usd = (edge_bps / 10_000.0) * config.rebalance_notional_usd;
+
+            let split = apply_revenue_split(gross_extraction_usd, cost_usd_used, config, &window_state);
+
+            protocol_revenue_usd = split.protocol_revenue_usd;
+            validator_searcher_revenue_usd = split.validator_searcher_revenue_usd;
+            net_extraction_usd = split.arb_net_revenue_usd;
+            lp_loss_proxy_usd = split.lp_loss_proxy_usd;
+
+            revenue.protocol_revenue_usd += protocol_revenue_usd;
+            revenue.validator_searcher_revenue_usd += validator_searcher_revenue_usd;
+            revenue.arb_net_revenue_usd += net_extraction_usd;
+            revenue.lp_loss_proxy_usd += lp_loss_proxy_usd;
+
+            total_gross += gross_extraction_usd;
+            total_net += net_extraction_usd;
+            sum_edge_bps_when_arb += edge_bps;
+            sum_threshold_bps_used += threshold_bps_used;
+            sum_cost_usd_used += cost_usd_used;
+        }
+
+        let drift_post_abs = relative_diff(pool_price_post, ext_price);
+
+        sum_drift_pre += drift_pre_abs;
+        sum_drift_post += drift_post_abs;
+        max_drift_pre = max_drift_pre.max(drift_pre_abs);
+        max_drift_post = max_drift_post.max(drift_post_abs);
+
+        obs.push(SlotObservation {
+            slot,
+            ext_price,
+            pool_price_pre,
+            pool_price_post,
+            drift_pre_abs,
+            drift_post_abs,
+            arb_fired,
+            edge_bps,
+            threshold_bps_used,
+            cost_usd_used,
+            gross_extraction_usd,
+            net_extraction_usd,
+            pfda_winner_active: winner_active,
+            protocol_revenue_usd,
+            validator_searcher_revenue_usd,
+            lp_loss_proxy_usd,
+        });
+
+        pool_price = pool_price_post;
+    }
+
+    let slots_f = config.slots as f64;
+    let arb_rate = if config.slots == 0 { 0.0 } else { arb_count as f64 / slots_f };
+
+    let avg_gap = if gaps.is_empty() {
+        0.0
+    } else {
+        gaps.iter().sum::<usize>() as f64 / gaps.len() as f64
+    };
+    let med_gap = median_usize(&gaps) as f64;
+
+    let avg_extraction_per_arb = if arb_count == 0 { 0.0 } else { total_gross / arb_count as f64 };
+    let avg_net_per_arb = if arb_count == 0 { 0.0 } else { total_net / arb_count as f64 };
+    let mean_edge_bps_when_arb = if arb_count == 0 { 0.0 } else { sum_edge_bps_when_arb / arb_count as f64 };
+    let mean_threshold_bps_used = if arb_count == 0 { 0.0 } else { sum_threshold_bps_used / arb_count as f64 };
+    let mean_cost_usd_used = if arb_count == 0 { 0.0 } else { sum_cost_usd_used / arb_count as f64 };
+
+    let lvr_proxy_usd = revenue.lp_loss_proxy_usd;
+    let lvr_proxy_ratio = if config.tvl_usd > 0.0 { lvr_proxy_usd / config.tvl_usd } else { 0.0 };
+
+    let summary = SimulationSummary {
+        label,
+        slots: config.slots,
+        arb_count,
+        arb_rate,
+        avg_slots_between_arb: avg_gap,
+        median_slots_between_arb: med_gap,
+        mean_drift_pre: if config.slots == 0 { 0.0 } else { sum_drift_pre / slots_f },
+        mean_drift_post: if config.slots == 0 { 0.0 } else { sum_drift_post / slots_f },
+        max_drift_pre,
+        max_drift_post,
+        total_arb_gross_usd: total_gross,
+        total_arb_net_usd: total_net,
+        avg_extraction_per_arb,
+        avg_net_per_arb,
+        mean_edge_bps_when_arb,
+        mean_threshold_bps_used,
+        mean_cost_usd_used,
+        total_protocol_revenue_usd: revenue.protocol_revenue_usd,
+        total_validator_searcher_revenue_usd: revenue.validator_searcher_revenue_usd,
+        total_lp_loss_proxy_usd: revenue.lp_loss_proxy_usd,
+        lvr_proxy_usd,
+        lvr_proxy_ratio,
+    };
+
+    Ok((summary, obs))
+}
+
+// =========================
+// Revenue split logic (PFDA heart)
+// =========================
+
+fn apply_revenue_split(
+    gross_extraction_usd: f64,
+    cost_usd: f64,
+    config: &SimulationConfig,
+    _window_state: &WindowState,
+) -> RevenueBreakdown {
+    let mut out = RevenueBreakdown::default();
+
+    match &config.auction_mode {
+        AuctionMode::Vanilla => {
+            let arb_net = (gross_extraction_usd - cost_usd).max(0.0);
+
+            // 最小モデル: VanillaのMEV利得は validator/searcher に吸われる
+            out.protocol_revenue_usd = 0.0;
+            out.validator_searcher_revenue_usd = arb_net;
+            out.arb_net_revenue_usd = 0.0;
+
+            out.lp_loss_proxy_usd =
+                out.protocol_revenue_usd + out.validator_searcher_revenue_usd + out.arb_net_revenue_usd;
+        }
+        AuctionMode::PfdaWindowed(p) => {
+            let pre_payment_net = (gross_extraction_usd - cost_usd).max(0.0);
+
+            let protocol_payment = match p.auction_payment_mode {
+                AuctionPaymentMode::None => 0.0,
+                AuctionPaymentMode::RealizedExcessShare => {
+                    (pre_payment_net * p.auction_competitiveness_alpha.clamp(0.0, 1.0))
+                        .min(pre_payment_net)
+                }
+                AuctionPaymentMode::FixedPerWindowUsd(x) => {
+                    if p.window_slots == 0 { 0.0 } else { x / p.window_slots as f64 }
+                }
+            };
+
+            let winner_net = (pre_payment_net - protocol_payment).max(0.0);
+
+            // PFDAでは「検索者/バリデータへ漏れる分」を小さく置く簡易モデル
+            out.protocol_revenue_usd = protocol_payment;
+            out.validator_searcher_revenue_usd = 0.0;
+            out.arb_net_revenue_usd = winner_net;
+
+            out.lp_loss_proxy_usd =
+                out.protocol_revenue_usd + out.validator_searcher_revenue_usd + out.arb_net_revenue_usd;
         }
     }
 
-    pub fn sample_bps(&self, rng_state: &mut u64) -> f64 {
-        match self {
-            ThresholdMode::Fixed(v) => *v,
-            ThresholdMode::QuantileMixture {
-                low_bps,
-                base_bps,
-                high_bps,
-                w_low,
-                w_base,
-                w_high,
-            } => {
-                let total = (*w_low + *w_base + *w_high).max(1e-12);
-                let u = next_rand_unit(rng_state) * total;
+    out
+}
 
-                if u < *w_low {
-                    *low_bps
-                } else if u < *w_low + *w_base {
-                    *base_bps
-                } else {
-                    *high_bps
-                }
+// =========================
+// Effective threshold / cost under PFDA
+// =========================
+
+fn effective_arb_terms(
+    base_threshold_bps: f64,
+    base_cost_usd: f64,
+    config: &SimulationConfig,
+    window_state: &WindowState,
+) -> (f64, f64, bool) {
+    match &config.auction_mode {
+        AuctionMode::Vanilla => (base_threshold_bps, base_cost_usd, false),
+        AuctionMode::PfdaWindowed(p) => {
+            if !window_state.winner_active {
+                return (base_threshold_bps, base_cost_usd, false);
+            }
+
+            // discountはまず threshold に反映（小さいedgeでも取れる）
+            let th = (base_threshold_bps - p.fee_discount_bps).max(0.0);
+
+            // costも少し下がる近似（後で実測ベースに置換）
+            let cost_discount_usd = (base_cost_usd * 0.2).min(base_cost_usd);
+            let c = (base_cost_usd - cost_discount_usd).max(0.0);
+
+            (th, c, true)
+        }
+    }
+}
+
+fn update_window_state(slot: usize, config: &SimulationConfig, state: &mut WindowState) {
+    match &config.auction_mode {
+        AuctionMode::Vanilla => {
+            state.window_index = 0;
+            state.winner_active = false;
+            state.winner_threshold_discount_bps = 0.0;
+            state.winner_cost_discount_usd = 0.0;
+        }
+        AuctionMode::PfdaWindowed(p) => {
+            let ws = p.window_slots.max(1);
+            state.window_index = slot / ws;
+            state.winner_active = true; // 最小版: 毎window必ず勝者あり
+            state.winner_threshold_discount_bps = p.fee_discount_bps;
+            state.winner_cost_discount_usd = 0.0;
+        }
+    }
+}
+
+// =========================
+// Sampling helpers (deterministic pseudo-rng)
+// =========================
+
+#[derive(Debug, Clone)]
+struct SmallRng {
+    state: u64,
+}
+
+impl SmallRng {
+    fn new(seed: u64) -> Self {
+        Self { state: seed ^ 0x9E3779B97F4A7C15 }
+    }
+
+    fn next_u64(&mut self) -> u64 {
+        // xorshift64*
+        let mut x = self.state;
+        x ^= x >> 12;
+        x ^= x << 25;
+        x ^= x >> 27;
+        self.state = x;
+        x.wrapping_mul(0x2545F4914F6CDD1D)
+    }
+
+    fn next_f64(&mut self) -> f64 {
+        let v = self.next_u64() >> 11;
+        (v as f64) / ((1u64 << 53) as f64)
+    }
+
+    fn sample_standard_normal(&mut self) -> f64 {
+        // Box-Muller
+        let u1 = (1.0 - self.next_f64()).max(1e-12);
+        let u2 = self.next_f64();
+        (-2.0 * u1.ln()).sqrt() * (2.0 * std::f64::consts::PI * u2).cos()
+    }
+}
+
+fn sample_log_return_per_slot(cfg: &SimulationConfig, rng: &mut SmallRng) -> f64 {
+    let dt_years = cfg.dt_seconds / (365.0 * 24.0 * 3600.0);
+    let mu = cfg.drift_annual;
+    let sigma = cfg.sigma_annual;
+    let z = rng.sample_standard_normal();
+    (mu - 0.5 * sigma * sigma) * dt_years + sigma * dt_years.sqrt() * z
+}
+
+fn sample_threshold_bps(mode: &ThresholdMode, rng: &mut SmallRng) -> f64 {
+    match mode {
+        ThresholdMode::FixedBps(x) => *x,
+        ThresholdMode::MixtureBps {
+            low_bps,
+            base_bps,
+            high_bps,
+            w_low,
+            w_base,
+            w_high: _,
+        } => {
+            let u = rng.next_f64();
+            if u < *w_low {
+                *low_bps
+            } else if u < (*w_low + *w_base) {
+                *base_bps
+            } else {
+                *high_bps
             }
         }
     }
 }
 
-/// sim設定（Phase 3.8.2 用）
-#[derive(Debug, Clone)]
-pub struct SimConfig {
-    pub slots: usize,
-    pub arb_cost_usd_per_trade: f64,
-    pub threshold_mode: ThresholdMode,
-}
-
-impl Default for SimConfig {
-    fn default() -> Self {
-        Self {
-            slots: 1200,
-            arb_cost_usd_per_trade: 0.10, // 仮値（後でJito proxyで改善）
-            threshold_mode: ThresholdMode::Fixed(2.5),
+fn sample_cost_usd(mode: &CostMode, rng: &mut SmallRng) -> f64 {
+    match mode {
+        CostMode::FixedUsd(x) => *x,
+        CostMode::MixtureUsd {
+            low_usd,
+            base_usd,
+            high_usd,
+            w_low,
+            w_base,
+            w_high: _,
+        } => {
+            let u = rng.next_f64();
+            if u < *w_low {
+                *low_usd
+            } else if u < (*w_low + *w_base) {
+                *base_usd
+            } else {
+                *high_usd
+            }
         }
     }
 }
 
-/// Phase 3.8.2: edgeスケールを実測レンジに寄せたslot観測モデル + threshold sampling
-pub fn run_simulation_with_config(
-    cfg: &SimConfig,
-    label: impl Into<String>,
-) -> Result<(SimSummary, Vec<SlotObservation>)> {
-    let label = label.into();
+// =========================
+// Utilities
+// =========================
 
-    let slots = cfg.slots;
-    let arb_cost = cfg.arb_cost_usd_per_trade;
-
-    // 仮想価格・プール価格（表示用）
-    let mut ext_price = 1.0_f64;
-    let mut pool_price = 1.0_f64;
-
-    // 擬似ランダム
-    let mut rng_state: u64 = 0x1234_5678_9abc_def0;
-
-    let mut obs = Vec::<SlotObservation>::with_capacity(slots);
-
-    for slot in 0..slots {
-        // ----- 外部価格を少し動かす（見た目用） -----
-        let r = next_rand_unit(&mut rng_state);
-        let centered = (r - 0.5) * 2.0;
-        let drift_trend = 0.000002 * ((slot as f64) / 180.0).sin();
-        let ret = centered * 0.00012 + drift_trend;
-        ext_price *= 1.0 + ret;
-
-        // ===== 実測っぽい pre-edge を生成 =====
-        let edge_bps_pre = sample_observed_like_edge_bps(&mut rng_state);
-
-        // 今回のポイント：thresholdを毎slotサンプル
-        let threshold_bps_used = cfg.threshold_mode.sample_bps(&mut rng_state);
-
-        // edge から pre_drift を作る（proxy）
-        let pre_drift_abs_sum = edge_bps_pre / 10_000.0 * 0.6;
-        let post_drift_abs_sum_if_arb = pre_drift_abs_sum * 0.5;
-        let post_drift_abs_sum_no_arb = pre_drift_abs_sum * 0.95;
-
-        // pool価格の差分を edge_bps に合わせて構成（表示用）
-        let sign = if next_rand_unit(&mut rng_state) < 0.5 { -1.0 } else { 1.0 };
-        let pre_pool_price = ext_price * (1.0 + sign * edge_bps_pre / 10_000.0);
-
-        let arb_fired = edge_bps_pre >= threshold_bps_used;
-
-        let (post_pool_price, post_drift_abs_sum, arb_gross_usd, arb_net_usd) = if arb_fired {
-            let diff = pre_pool_price - ext_price;
-            let post_price = ext_price + diff * 0.5;
-
-            // 3.7.1の onchain notional に近いレンジ
-            let notional_usd = 80.0 + 920.0 * next_rand_unit(&mut rng_state); // 80~1000
-            let gross = (edge_bps_pre / 10_000.0) * notional_usd * 0.35;
-            let net = (gross - arb_cost).max(0.0);
-
-            (post_price, post_drift_abs_sum_if_arb, gross, net)
-        } else {
-            let post_price = pre_pool_price + (ext_price - pre_pool_price) * 0.05;
-            (post_price, post_drift_abs_sum_no_arb, 0.0, 0.0)
-        };
-
-        pool_price = post_pool_price;
-
-        obs.push(SlotObservation {
-            slot,
-            ext_price,
-            pre_pool_price,
-            post_pool_price: pool_price,
-            pre_drift_abs_sum,
-            post_drift_abs_sum,
-            arb_fired,
-            arb_gross_usd,
-            arb_net_usd,
-            edge_bps_pre,
-            threshold_bps_used,
-        });
-    }
-
-    let summary = summarize(&obs, label);
-    Ok((summary, obs))
-}
-
-/// 固定3シナリオ（従来）
-pub fn run_threshold_calibration_scenarios() -> Result<Vec<SimSummary>> {
-    let scenarios = [
-        ("Low (p10≈0.9bps)", ThresholdMode::Fixed(1.0_f64)),
-        ("Base (p50≈2.4bps)", ThresholdMode::Fixed(2.5_f64)),
-        ("High (p90≈4.6bps)", ThresholdMode::Fixed(4.5_f64)),
-    ];
-
-    let mut out = Vec::new();
-    for (label, mode) in scenarios {
-        let cfg = SimConfig {
-            threshold_mode: mode,
-            ..SimConfig::default()
-        };
-        let (summary, _obs) = run_simulation_with_config(&cfg, label)?;
-        out.push(summary);
-    }
-    Ok(out)
-}
-
-/// Phase 3.8.2-A: 分位点ミックス閾値シナリオ
-pub fn run_threshold_mixture_scenario() -> Result<SimSummary> {
-    let cfg = SimConfig {
-        threshold_mode: ThresholdMode::QuantileMixture {
-            low_bps: 1.0,
-            base_bps: 2.5,
-            high_bps: 4.5,
-            w_low: 0.20,
-            w_base: 0.60,
-            w_high: 0.20,
-        },
-        ..SimConfig::default()
-    };
-
-    let (summary, _obs) = run_simulation_with_config(&cfg, "Mixture (20/60/20)")?;
-    Ok(summary)
-}
-
-/// 単発実行（CLI互換）
-pub fn run_simulation() -> Result<()> {
-    let cfg = SimConfig::default();
-    let (summary, obs) =
-        run_simulation_with_config(&cfg, format!("Single run ({})", cfg.threshold_mode.describe()))?;
-
-    println!("=== TFMM Simulation (Phase 3.8.2 single run) ===");
-    print_summary(&summary);
-
-    println!("\n--- First 5 slots (pre/post preview) ---");
-    for x in obs.iter().take(5) {
-        println!(
-            "slot={:4} ext={:.6} pre(px={:.6},dr={:.6}) post(px={:.6},dr={:.6}) arb={} gross={:.4} net={:.4} edge_bps={:.3} th_bps={:.3}",
-            x.slot,
-            x.ext_price,
-            x.pre_pool_price,
-            x.pre_drift_abs_sum,
-            x.post_pool_price,
-            x.post_drift_abs_sum,
-            x.arb_fired,
-            x.arb_gross_usd,
-            x.arb_net_usd,
-            x.edge_bps_pre,
-            x.threshold_bps_used,
-        );
-    }
-
-    Ok(())
-}
-
-/// 実測っぽい edge 分布をざっくり再現する簡易サンプラー
-/// 目標感（Phase 3.7.1）: p10~0.9, p50~2.4, p90~4.6 bps
-fn sample_observed_like_edge_bps(state: &mut u64) -> f64 {
-    let u = next_rand_unit(state);
-
-    if u < 0.10 {
-        let v = next_rand_unit(state);
-        0.01 + v * 0.89 // 0.01..0.90
-    } else if u < 0.50 {
-        let v = next_rand_unit(state);
-        0.90 + v * 1.60 // 0.9..2.5
-    } else if u < 0.90 {
-        let v = next_rand_unit(state);
-        2.50 + v * 2.10 // 2.5..4.6
-    } else {
-        let v = next_rand_unit(state);
-        4.60 + v * 1.90 // 4.6..6.5
-    }
-}
-
-fn summarize(obs: &[SlotObservation], label: String) -> SimSummary {
-    let slots = obs.len();
-    let arb_indices: Vec<usize> = obs
-        .iter()
-        .enumerate()
-        .filter_map(|(i, x)| x.arb_fired.then_some(i))
-        .collect();
-    let arb_count = arb_indices.len();
-
-    let arb_rate = if slots > 0 {
-        arb_count as f64 / slots as f64
-    } else {
+fn relative_diff(a: f64, b: f64) -> f64 {
+    if b == 0.0 {
         0.0
-    };
-
-    let mut gaps = Vec::<usize>::new();
-    for w in arb_indices.windows(2) {
-        gaps.push(w[1] - w[0]);
-    }
-    let avg_slots_between_arb = if gaps.is_empty() {
-        slots as f64
     } else {
-        gaps.iter().sum::<usize>() as f64 / gaps.len() as f64
-    };
-    let median_slots_between_arb = median_usize(&gaps).unwrap_or(slots as f64);
-
-    let mean_drift_pre = mean(obs.iter().map(|x| x.pre_drift_abs_sum));
-    let mean_drift_post = mean(obs.iter().map(|x| x.post_drift_abs_sum));
-
-    let total_arb_gross_usd: f64 = obs.iter().map(|x| x.arb_gross_usd).sum();
-    let total_arb_net_usd: f64 = obs.iter().map(|x| x.arb_net_usd).sum();
-
-    let avg_extraction_per_arb = if arb_count > 0 {
-        total_arb_gross_usd / arb_count as f64
-    } else {
-        0.0
-    };
-    let avg_net_per_arb = if arb_count > 0 {
-        total_arb_net_usd / arb_count as f64
-    } else {
-        0.0
-    };
-
-    let mean_edge_bps_when_arb = {
-        let xs: Vec<f64> = obs
-            .iter()
-            .filter(|x| x.arb_fired)
-            .map(|x| x.edge_bps_pre)
-            .collect();
-        mean(xs.into_iter())
-    };
-
-    let mean_threshold_bps_used = mean(obs.iter().map(|x| x.threshold_bps_used));
-
-    SimSummary {
-        label,
-        slots,
-        arb_count,
-        arb_rate,
-        avg_slots_between_arb,
-        median_slots_between_arb,
-        mean_drift_pre,
-        mean_drift_post,
-        total_arb_gross_usd,
-        total_arb_net_usd,
-        avg_extraction_per_arb,
-        avg_net_per_arb,
-        mean_edge_bps_when_arb,
-        mean_threshold_bps_used,
+        ((a - b) / b).abs()
     }
 }
 
-pub fn print_summary(s: &SimSummary) {
-    println!("label                 : {}", s.label);
-    println!("slots                 : {}", s.slots);
-    println!("arb_count             : {}", s.arb_count);
-    println!("arb_rate              : {:.4} ({:.2}%)", s.arb_rate, s.arb_rate * 100.0);
-    println!("avg_slots_between_arb : {:.2}", s.avg_slots_between_arb);
-    println!("median_slots_between_arb: {:.2}", s.median_slots_between_arb);
-    println!("mean_drift_pre        : {:.6}", s.mean_drift_pre);
-    println!("mean_drift_post       : {:.6}", s.mean_drift_post);
-    println!("total_arb_gross_usd   : {:.4}", s.total_arb_gross_usd);
-    println!("total_arb_net_usd     : {:.4}", s.total_arb_net_usd);
-    println!("avg_extraction_per_arb: {:.4}", s.avg_extraction_per_arb);
-    println!("avg_net_per_arb       : {:.4}", s.avg_net_per_arb);
-    println!("mean_edge_bps_when_arb: {:.4}", s.mean_edge_bps_when_arb);
-    println!("mean_threshold_bps_used: {:.4}", s.mean_threshold_bps_used);
-}
-
-fn mean<I>(iter: I) -> f64
-where
-    I: IntoIterator<Item = f64>,
-{
-    let mut sum = 0.0;
-    let mut n = 0usize;
-    for x in iter {
-        sum += x;
-        n += 1;
-    }
-    if n == 0 { 0.0 } else { sum / n as f64 }
-}
-
-fn median_usize(xs: &[usize]) -> Option<f64> {
+fn median_usize(xs: &[usize]) -> usize {
     if xs.is_empty() {
-        return None;
+        return 0;
     }
     let mut v = xs.to_vec();
     v.sort_unstable();
     let n = v.len();
     if n % 2 == 1 {
-        Some(v[n / 2] as f64)
+        v[n / 2]
     } else {
-        Some((v[n / 2 - 1] as f64 + v[n / 2] as f64) / 2.0)
+        (v[n / 2 - 1] + v[n / 2]) / 2
     }
 }
 
-fn next_rand_unit(state: &mut u64) -> f64 {
-    // xorshift64*
-    let mut x = *state;
-    x ^= x >> 12;
-    x ^= x << 25;
-    x ^= x >> 27;
-    *state = x;
-    let z = x.wrapping_mul(0x2545F4914F6CDD1D);
-    ((z >> 11) as f64) / ((1u64 << 53) as f64)
+// =========================
+// Preset experiment helpers
+// =========================
+
+fn default_real_calibrated_base_config() -> SimulationConfig {
+    let mut cfg = SimulationConfig::default();
+
+    // Phase 4.2 実測からの近似値をデフォルトに入れる（あとで差し替えやすく）
+    cfg.threshold_mode = ThresholdMode::MixtureBps {
+        low_bps: 0.150,   // p10 edge_bps 近似
+        base_bps: 1.801,  // p50 edge_bps 近似
+        high_bps: 4.384,  // p90 edge_bps 近似
+        w_low: 0.2,
+        w_base: 0.6,
+        w_high: 0.2,
+    };
+
+    cfg.cost_mode = CostMode::MixtureUsd {
+        low_usd: 0.000409,   // p10 fee_usd_proxy
+        base_usd: 0.000828,  // p50 fee_usd_proxy
+        high_usd: 0.001779,  // p90 fee_usd_proxy
+        w_low: 0.2,
+        w_base: 0.6,
+        w_high: 0.2,
+    };
+
+    cfg
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+pub fn run_pfda_baseline_vs_pfda() -> Result<Vec<SimulationSummary>> {
+    let mut out = Vec::new();
 
-    #[test]
-    fn fixed_scenarios_run() {
-        let xs = run_threshold_calibration_scenarios().unwrap();
-        assert_eq!(xs.len(), 3);
+    let mut base = default_real_calibrated_base_config();
+    base.auction_mode = AuctionMode::Vanilla;
+
+    let (s1, _) = run_simulation(&base, "Vanilla (Mixture TH+Cost)")?;
+    out.push(s1);
+
+    let mut pfda = default_real_calibrated_base_config();
+    pfda.auction_mode = AuctionMode::PfdaWindowed(PfdaParams {
+        window_slots: 50,
+        fee_discount_bps: 1.0,
+        auction_payment_mode: AuctionPaymentMode::RealizedExcessShare,
+        auction_competitiveness_alpha: 0.7,
+    });
+
+    let (s2, _) = run_simulation(&pfda, "PFDA Windowed (disc=1bps, alpha=0.7)")?;
+    out.push(s2);
+
+    Ok(out)
+}
+
+// =========================
+// Phase 5.1: PFDA parameter sweep
+// =========================
+
+#[derive(Debug, Clone)]
+pub struct PfdaSweepRow {
+    pub label: String,
+
+    // parameters
+    pub window_slots: usize,
+    pub fee_discount_bps: f64,
+    pub alpha: f64,
+
+    // baseline metrics
+    pub vanilla_lvr_proxy_usd: f64,
+    pub vanilla_lvr_proxy_ratio: f64,
+    pub vanilla_arb_rate: f64,
+    pub vanilla_total_protocol_revenue_usd: f64,
+    pub vanilla_total_validator_searcher_revenue_usd: f64,
+    pub vanilla_total_lp_loss_proxy_usd: f64,
+
+    // pfda metrics
+    pub pfda_lvr_proxy_usd: f64,
+    pub pfda_lvr_proxy_ratio: f64,
+    pub pfda_arb_rate: f64,
+    pub pfda_total_protocol_revenue_usd: f64,
+    pub pfda_total_validator_searcher_revenue_usd: f64,
+    pub pfda_total_lp_loss_proxy_usd: f64,
+
+    // deltas
+    pub lvr_reduction_usd: f64,
+    pub lvr_reduction_ratio: f64,      // absolute ratio-point reduction
+    pub lvr_reduction_pct: f64,        // percent reduction vs vanilla
+    pub protocol_revenue_delta_usd: f64,
+    pub validator_revenue_delta_usd: f64,
+    pub lp_loss_delta_usd: f64,
+}
+
+pub fn run_pfda_parameter_sweep() -> Result<Vec<PfdaSweepRow>> {
+    let mut rows = Vec::new();
+
+    // ---- Shared calibrated baseline config (from Phase 4.x outputs) ----
+    let mut base = SimulationConfig::default();
+
+    // Threshold calibration (Phase 3.7/3.8-ish proxy)
+    base.threshold_mode = ThresholdMode::MixtureBps {
+        low_bps: 1.0,
+        base_bps: 2.5,
+        high_bps: 4.5,
+        w_low: 0.2,
+        w_base: 0.6,
+        w_high: 0.2,
+    };
+
+    // Cost calibration (replace these if newer Phase 4.2 quantiles differ)
+    // You can wire these from CSV later; for now fixed constants are fine.
+    base.cost_mode = CostMode::MixtureUsd {
+        low_usd: 0.000409,
+        base_usd: 0.000828,
+        high_usd: 0.001779,
+        w_low: 0.2,
+        w_base: 0.6,
+        w_high: 0.2,
+    };
+
+    // Make sim a bit more stable for sweep comparisons
+    base.slots = 5000;
+    base.seed = 42;
+
+    // ---- Vanilla once (reference) ----
+    let mut vanilla_cfg = base.clone();
+    vanilla_cfg.auction_mode = AuctionMode::Vanilla;
+    let (vanilla_summary, _vanilla_obs) = run_simulation(&vanilla_cfg, "Vanilla baseline")?;
+
+    // ---- Sweep grids ----
+    let window_slots_grid = [10_usize, 25, 50, 100, 250];
+    let fee_discount_bps_grid = [0.5_f64, 1.0, 2.0, 3.0];
+    let alpha_grid = [0.25_f64, 0.50, 0.75, 0.90];
+
+    for &window_slots in &window_slots_grid {
+        for &fee_discount_bps in &fee_discount_bps_grid {
+            for &alpha in &alpha_grid {
+                let mut cfg = base.clone();
+                cfg.auction_mode = AuctionMode::PfdaWindowed(PfdaParams {
+                    window_slots,
+                    fee_discount_bps,
+                    auction_payment_mode: AuctionPaymentMode::RealizedExcessShare,
+                    auction_competitiveness_alpha: alpha,
+                });
+
+                let label = format!(
+                    "PFDA ws={} disc={:.2}bps alpha={:.2}",
+                    window_slots, fee_discount_bps, alpha
+                );
+
+                let (pfda_summary, _obs) = run_simulation(&cfg, label.clone())?;
+
+                let vanilla_lvr = vanilla_summary.lvr_proxy_usd;
+                let pfda_lvr = pfda_summary.lvr_proxy_usd;
+
+                let lvr_reduction_usd = vanilla_lvr - pfda_lvr;
+                let lvr_reduction_ratio =
+                    vanilla_summary.lvr_proxy_ratio - pfda_summary.lvr_proxy_ratio;
+
+                let lvr_reduction_pct = if vanilla_lvr.abs() > 1e-12 {
+                    lvr_reduction_usd / vanilla_lvr.abs()
+                } else {
+                    0.0
+                };
+
+                rows.push(PfdaSweepRow {
+                    label,
+
+                    window_slots,
+                    fee_discount_bps,
+                    alpha,
+
+                    vanilla_lvr_proxy_usd: vanilla_summary.lvr_proxy_usd,
+                    vanilla_lvr_proxy_ratio: vanilla_summary.lvr_proxy_ratio,
+                    vanilla_arb_rate: vanilla_summary.arb_rate,
+                    vanilla_total_protocol_revenue_usd: vanilla_summary.total_protocol_revenue_usd,
+                    vanilla_total_validator_searcher_revenue_usd:
+                        vanilla_summary.total_validator_searcher_revenue_usd,
+                    vanilla_total_lp_loss_proxy_usd: vanilla_summary.total_lp_loss_proxy_usd,
+
+                    pfda_lvr_proxy_usd: pfda_summary.lvr_proxy_usd,
+                    pfda_lvr_proxy_ratio: pfda_summary.lvr_proxy_ratio,
+                    pfda_arb_rate: pfda_summary.arb_rate,
+                    pfda_total_protocol_revenue_usd: pfda_summary.total_protocol_revenue_usd,
+                    pfda_total_validator_searcher_revenue_usd:
+                        pfda_summary.total_validator_searcher_revenue_usd,
+                    pfda_total_lp_loss_proxy_usd: pfda_summary.total_lp_loss_proxy_usd,
+
+                    lvr_reduction_usd,
+                    lvr_reduction_ratio,
+                    lvr_reduction_pct,
+                    protocol_revenue_delta_usd:
+                        pfda_summary.total_protocol_revenue_usd
+                            - vanilla_summary.total_protocol_revenue_usd,
+                    validator_revenue_delta_usd:
+                        pfda_summary.total_validator_searcher_revenue_usd
+                            - vanilla_summary.total_validator_searcher_revenue_usd,
+                    lp_loss_delta_usd:
+                        pfda_summary.total_lp_loss_proxy_usd
+                            - vanilla_summary.total_lp_loss_proxy_usd,
+                });
+            }
+        }
     }
 
-    #[test]
-    fn mixture_scenario_runs() {
-        let s = run_threshold_mixture_scenario().unwrap();
-        assert_eq!(s.slots, 1200);
-    }
-
-    #[test]
-    fn threshold_changes_arb_count_monotonically_for_fixed() {
-        let (low, _) = run_simulation_with_config(
-            &SimConfig {
-                threshold_mode: ThresholdMode::Fixed(1.0),
-                ..Default::default()
-            },
-            "low",
-        )
-        .unwrap();
-        let (base, _) = run_simulation_with_config(
-            &SimConfig {
-                threshold_mode: ThresholdMode::Fixed(2.5),
-                ..Default::default()
-            },
-            "base",
-        )
-        .unwrap();
-        let (high, _) = run_simulation_with_config(
-            &SimConfig {
-                threshold_mode: ThresholdMode::Fixed(4.5),
-                ..Default::default()
-            },
-            "high",
-        )
-        .unwrap();
-
-        assert!(low.arb_count >= base.arb_count);
-        assert!(base.arb_count >= high.arb_count);
-    }
+    Ok(rows)
 }

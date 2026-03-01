@@ -169,6 +169,10 @@ pub struct SlotObservation {
     pub protocol_revenue_usd: f64,
     pub validator_searcher_revenue_usd: f64,
     pub lp_loss_proxy_usd: f64,
+    
+    pub ideal_portfolio_value: f64,
+    pub hodl_value: f64,
+    pub slots_since_last_arb: usize,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -276,12 +280,21 @@ pub fn run_simulation(
 
     let mut window_state = WindowState::default();
 
+    let mut ideal_portfolio_value = config.tvl_usd;
+    let initial_tvl = config.tvl_usd;
+
+    let mut initial_ext_price = 1.0_f64;
+
     for slot in 0..config.slots {
         update_window_state(slot, config, &mut window_state);
 
         // 1) 外部価格更新（簡易GBM近似）
         let ret = sample_log_return_per_slot(config, &mut rng);
         ext_price *= ret.exp();
+
+        // ★ 修正1: 理想ポートフォリオとHODLの価値を「厳密な数式（G3Mの不変量）」で計算
+        let ideal_portfolio_value = initial_tvl * (ext_price / initial_ext_price).sqrt();
+        let hodl_value = initial_tvl * 0.5 * (ext_price / initial_ext_price) + initial_tvl * 0.5;
 
         // 2) TFMMのtarget shiftによる pool implied price押し出し（簡易）
         let pool_price_pre = pool_price * (config.weight_shift_push_per_slot).exp();
@@ -297,9 +310,16 @@ pub fn run_simulation(
         let (threshold_bps_used, cost_usd_used, winner_active) =
             effective_arb_terms(base_threshold_bps, base_cost_usd, config, &window_state);
 
-        // 5) 裁定発火判定
-        let arb_fired = edge_bps >= threshold_bps_used;
+        // ★ 修正2: 抜け落ちていた「バッチ末尾でのみ清算を許可する」制約
+        let is_batch_clearing_slot = match &config.auction_mode {
+            AuctionMode::Vanilla => true, // Vanillaはいつでも清算可能
+            AuctionMode::PfdaWindowed(p) => slot % p.window_slots.max(1) == p.window_slots.max(1) - 1, // PFDAはウィンドウ末尾のみ
+        };
 
+        // 5) 裁定発火判定（エッジが閾値を超え、かつ清算可能なスロットであること）
+        let arb_fired = (edge_bps >= threshold_bps_used) && is_batch_clearing_slot;
+
+        let mut current_arb_gap = 0;
         let mut pool_price_post = pool_price_pre;
         let mut gross_extraction_usd = 0.0;
         let mut net_extraction_usd = 0.0;
@@ -311,7 +331,9 @@ pub fn run_simulation(
             arb_count += 1;
 
             if let Some(prev) = last_arb_slot {
-                gaps.push(slot - prev);
+                let current_gap = slot - prev;
+                gaps.push(current_gap);
+                current_arb_gap = current_gap;
             }
             last_arb_slot = Some(slot);
 
@@ -342,6 +364,7 @@ pub fn run_simulation(
             sum_edge_bps_when_arb += edge_bps;
             sum_threshold_bps_used += threshold_bps_used;
             sum_cost_usd_used += cost_usd_used;
+            
         }
 
         let drift_post_abs = relative_diff(pool_price_post, ext_price);
@@ -368,6 +391,9 @@ pub fn run_simulation(
             protocol_revenue_usd,
             validator_searcher_revenue_usd,
             lp_loss_proxy_usd,
+            ideal_portfolio_value,
+            hodl_value,
+            slots_since_last_arb: current_arb_gap,
         });
 
         pool_price = pool_price_post;
@@ -902,4 +928,86 @@ pub fn run_pfda_parameter_sweep() -> Result<Vec<PfdaSweepRow>> {
     }
 
     Ok(rows)
+}
+
+// =========================
+// Phase 6: Paper Micro-structure Export
+// =========================
+
+pub fn export_paper_microstructure_csv(file_path: &str) -> Result<()> {
+    
+    let mut cfg = SimulationConfig::default();
+    cfg.slots = 5000;
+    cfg.sigma_annual = 0.80;
+    cfg.seed = 42;
+    cfg.threshold_mode = ThresholdMode::MixtureBps {
+        low_bps: 0.150, base_bps: 1.800, high_bps: 4.300,
+        w_low: 0.2, w_base: 0.6, w_high: 0.2,
+    };
+    cfg.cost_mode = CostMode::FixedUsd(0.0008);
+
+    cfg.auction_mode = AuctionMode::Vanilla;
+    let (_, obs_vanilla) = run_simulation(&cfg, "Vanilla")?;
+
+    cfg.auction_mode = AuctionMode::PfdaWindowed(PfdaParams {
+        window_slots: 10,
+        fee_discount_bps: 1.0,
+        auction_payment_mode: AuctionPaymentMode::RealizedExcessShare,
+        auction_competitiveness_alpha: 0.9,
+    });
+    let (_, obs_pfda) = run_simulation(&cfg, "PFDA")?;
+
+
+    let mut wtr = csv::Writer::from_path(file_path).map_err(|e| anyhow::anyhow!("CSV Error: {}", e))?;
+    wtr.write_record(&[
+        "slot", "market_price", 
+        "vanilla_price", "pfda_price", 
+        "vanilla_cum_lvr", "pfda_cum_lvr", 
+        "vanilla_arb_profit", "pfda_arb_profit",
+        "ideal_portfolio_value", "hodl_value",
+        "vanilla_pool_value", "pfda_pool_value",
+        "vanilla_arb_gap", "pfda_arb_gap",
+        
+    ])?;
+
+    let mut vanilla_cum_lvr = 0.0;
+    let mut pfda_cum_lvr = 0.0;
+
+    for (v, p) in obs_vanilla.into_iter().zip(obs_pfda.into_iter()) {
+        vanilla_cum_lvr += v.lp_loss_proxy_usd;
+        pfda_cum_lvr += p.lp_loss_proxy_usd;
+
+        wtr.write_record(&[
+            v.slot.to_string(),
+            v.ext_price.to_string(),
+            v.pool_price_post.to_string(),
+            p.pool_price_post.to_string(),
+            vanilla_cum_lvr.to_string(),
+            pfda_cum_lvr.to_string(),
+            v.arb_net_revenue_usd().to_string(), // Vanillaの利益
+            p.arb_net_revenue_usd().to_string(), // PFDAの利益
+            v.ideal_portfolio_value.to_string(),
+            v.hodl_value.to_string(),
+            (v.ideal_portfolio_value - vanilla_cum_lvr).to_string(), // VanillaのTVL
+            (p.ideal_portfolio_value - pfda_cum_lvr).to_string(),    // PFDAのTVL
+            v.slots_since_last_arb.to_string(),
+            p.slots_since_last_arb.to_string(),
+        ])?;
+    }
+    wtr.flush().map_err(|e| anyhow::anyhow!("CSV Flush Error: {}", e))?;
+
+    println!("✅ Micro-structure data exported to {}", file_path);
+    Ok(())
+}
+
+
+impl SlotObservation {
+    fn arb_net_revenue_usd(&self) -> f64 {
+    
+        if self.pfda_winner_active {
+            self.net_extraction_usd
+        } else {
+            self.validator_searcher_revenue_usd + self.net_extraction_usd
+        }
+    }
 }

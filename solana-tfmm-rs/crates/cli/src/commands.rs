@@ -47,7 +47,9 @@ pub fn run_sim() -> Result<()> {
     println!("- Pythonで results/pfda_sweep_summary.csv を読み込み");
     println!("- LVR削減率ヒートマップ（window_slots × discount_bps, alpha別）を出す");
     println!("- マネーショット図：best PFDA vs vanilla のLVR比較を作る");
-
+    println!("\n=== Phase 6: Paper Micro-structure Data Export ===");
+    tfmm_sim::export_paper_microstructure_csv("results/timeseries_log.csv")?;
+    
     Ok(())
 }
 

@@ -36,7 +36,7 @@ def plot_timeseries_figures(df):
     ax.set_ylabel('Price')
     ax.legend(loc='upper left')
     fig.tight_layout()
-    fig.savefig('../figures/paper/fig1_price_tracking.png')
+    fig.savefig('../figures/paper/fig1_price_tracking.pdf', format='pdf', bbox_inches='tight')
     
     # ---------------------------------------------------
     # Fig 2: Cumulative Performance (vs HODL)
@@ -51,7 +51,7 @@ def plot_timeseries_figures(df):
     ax.set_ylabel('Performance vs HODL (USD)')
     ax.legend(loc='upper left')
     fig.tight_layout()
-    fig.savefig('../figures/paper/fig2_performance.png')
+    fig.savefig('../figures/paper/fig2_performance.pdf', format='pdf', bbox_inches='tight')
     
     # ---------------------------------------------------
     # Fig 3: Inter-trade Delay
@@ -68,7 +68,7 @@ def plot_timeseries_figures(df):
     ax.set_ylabel('Density')
     ax.legend(loc='upper right')
     fig.tight_layout()
-    fig.savefig('../figures/paper/fig3_delay.png')
+    fig.savefig('../figures/paper/fig3_delay.pdf', format='pdf', bbox_inches='tight')
 
 def plot_sweep_and_revenue(df_sweep):
     # ---------------------------------------------------
@@ -90,7 +90,7 @@ def plot_sweep_and_revenue(df_sweep):
     ax.set_ylabel('Cumulative Value Extracted (USD)')
     ax.legend(loc='upper right', bbox_to_anchor=(1.0, 1.15))
     fig.tight_layout()
-    fig.savefig('../figures/paper/fig4_revenue_split.png')
+    fig.savefig('../figures/paper/fig4_revenue_split.pdf', format='pdf', bbox_inches='tight')
 
     # ---------------------------------------------------
     # Fig 5: Parameter Sensitivity Heatmap
@@ -108,7 +108,7 @@ def plot_sweep_and_revenue(df_sweep):
         ax.set_ylabel('Competitiveness (α)')
         ax.invert_yaxis() # y軸を下から上へ
         fig.tight_layout()
-        fig.savefig('../figures/paper/fig5_heatmap.png')
+        fig.savefig('../figures/paper/fig5_heatmap.pdf', format='pdf', bbox_inches='tight')
 
 if __name__ == "__main__":
     import os
@@ -122,6 +122,6 @@ if __name__ == "__main__":
         df_sw = pd.read_csv('../results/pfda_sweep_summary.csv')
         plot_sweep_and_revenue(df_sw)
         
-        print("✅ All 5 academic figures generated successfully.")
+        print("✅ All 5 academic figures generated successfully as PDFs.")
     except Exception as e:
         print(f"Error generating figures: {e}")

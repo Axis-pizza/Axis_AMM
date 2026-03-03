@@ -715,10 +715,6 @@ fn default_real_calibrated_base_config() -> SimulationConfig {
 // Preset experiment helpers (3 Pools Validation)
 // =========================
 
-// =========================
-// Preset experiment helpers (3 Pools Validation)
-// =========================
-
 pub fn run_pfda_baseline_vs_pfda() -> Result<Vec<SimulationSummary>> {
     let mut out = Vec::new();
 

@@ -68,7 +68,7 @@ function findTicket(pool: PublicKey, user: PublicKey, batchId: bigint) {
 // Instruction builders
 function ixInitPool(
   payer: PublicKey, pool: PublicKey, queue: PublicKey,
-  mints: PublicKey[], vaults: PublicKey[],
+  mints: PublicKey[], vaults: PublicKey[], treasury: PublicKey,
 ): TransactionInstruction {
   const data = Buffer.concat([
     Buffer.from([0]),           // disc
@@ -90,6 +90,7 @@ function ixInitPool(
       { pubkey: vaults[0], isSigner: false, isWritable: true },
       { pubkey: vaults[1], isSigner: false, isWritable: true },
       { pubkey: vaults[2], isSigner: false, isWritable: true },
+      { pubkey: treasury, isSigner: false, isWritable: false },
       { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
       { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
     ],
@@ -250,7 +251,7 @@ async function main() {
   // 5. InitializePool
   console.log("\n▶ Step 5: InitializePool (3 tokens, 33.3% each)");
   const initSig = await sendAndConfirmTransaction(conn,
-    new Transaction().add(ixInitPool(payer.publicKey, pool, queue0, mints, vaults)),
+    new Transaction().add(ixInitPool(payer.publicKey, pool, queue0, mints, vaults, payer.publicKey)),
     [payer]
   );
   cuLog["InitPool"] = await getCU(conn, initSig);

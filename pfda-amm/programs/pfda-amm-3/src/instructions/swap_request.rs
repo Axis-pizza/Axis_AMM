@@ -58,6 +58,11 @@ pub fn process_swap_request_3(
         if pool.reentrancy_guard != 0 {
             return Err(Pfda3Error::ReentrancyDetected.into());
         }
+        if pool.paused != 0 {
+            return Err(Pfda3Error::InvalidDiscriminator.into()); // pool is paused
+        }
+        // Security rule 7: verify vault mint matches pool token
+        crate::security::verify_token_account_mint(vault, &pool.token_mints[in_token_idx as usize])?;
         (*pool_ai.key(), pool.current_batch_id, pool.current_window_end)
     };
 

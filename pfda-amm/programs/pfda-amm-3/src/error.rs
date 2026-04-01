@@ -20,6 +20,9 @@ pub enum Pfda3Error {
     InvalidWindowSlots = 8014,
     AlreadyInitialized = 8015,
     InvalidTokenIndex = 8016,
+    DivisionByZero = 8017,
+    PoolPaused = 8018,
+    TreasuryMismatch = 8019,
 }
 
 impl From<Pfda3Error> for ProgramError {

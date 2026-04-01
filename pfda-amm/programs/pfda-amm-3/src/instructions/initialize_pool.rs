@@ -42,11 +42,22 @@ pub fn process_initialize_pool_3(
         return Err(Pfda3Error::InvalidWeight.into());
     }
 
-    let [payer, pool_ai, queue_ai, mint0, mint1, mint2, vault0, vault1, vault2, _sys, _tok, ..] =
-        accounts
-    else {
+    // Accounts: payer, pool, queue, mint0-2, vault0-2, treasury, system, token_program
+    if accounts.len() < 12 {
         return Err(ProgramError::NotEnoughAccountKeys);
-    };
+    }
+    let payer = &accounts[0];
+    let pool_ai = &accounts[1];
+    let queue_ai = &accounts[2];
+    let mint0 = &accounts[3];
+    let mint1 = &accounts[4];
+    let mint2 = &accounts[5];
+    let vault0 = &accounts[6];
+    let vault1 = &accounts[7];
+    let vault2 = &accounts[8];
+    let treasury_ai = &accounts[9];
+    let _sys = &accounts[10];
+    let _tok = &accounts[11];
 
     let mints = [mint0.key(), mint1.key(), mint2.key()];
 
@@ -117,10 +128,13 @@ pub fn process_initialize_pool_3(
         pool.window_slots = window_slots;
         pool.current_batch_id = 0;
         pool.current_window_end = clock.slot + window_slots;
+        pool.treasury = *treasury_ai.key();
+        pool.authority = *payer.key();
         pool.base_fee_bps = base_fee_bps;
         pool.bump = pool_bump;
         pool.reentrancy_guard = 0;
-        pool._padding = [0; 4];
+        pool.paused = 0;
+        pool._padding = [0; 3];
     }
 
     // Create batch queue for batch 0

@@ -69,13 +69,18 @@ pub fn process_swap(
         return Err(G3mError::InvalidTokenIndex.into());
     }
 
-    // Validate vault accounts match pool state
+    // Validate vault accounts match pool state + security checks
     if vault_in.key().as_ref() != &pool.token_vaults[in_i] {
         return Err(G3mError::PoolMismatch.into());
     }
     if vault_out.key().as_ref() != &pool.token_vaults[out_i] {
         return Err(G3mError::PoolMismatch.into());
     }
+    // Security rule 6: verify token accounts owned by token program
+    crate::security::verify_token_account_owner(vault_in)?;
+    crate::security::verify_token_account_owner(vault_out)?;
+    crate::security::verify_token_account_owner(user_token_in)?;
+    crate::security::verify_token_account_owner(user_token_out)?;
 
     // Compute swap output
     let amount_out = compute_swap_output(

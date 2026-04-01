@@ -112,12 +112,18 @@ pub fn process_claim_3(program_id: &Pubkey, accounts: &[AccountInfo]) -> Program
 
     // amount_out = amount_in * price_in / price_out * (1 - fee)
     // Prices are RAW Q32.32 (no fee baked in). Fee applied here.
-    let price_in = clearing_prices[in_i].max(1) as u128;
-    let price_out = clearing_prices[out_i].max(1) as u128;
+    let price_in = clearing_prices[in_i] as u128;
+    let price_out = clearing_prices[out_i] as u128;
+    if price_in == 0 || price_out == 0 {
+        return Err(Pfda3Error::DivisionByZero.into());
+    }
     let fee_factor = (10_000u128).checked_sub(fee_bps as u128)
         .ok_or(Pfda3Error::Overflow)?;
-    let raw_out = (amount_in as u128) * price_in / price_out;
-    let amount_out = (raw_out * fee_factor / 10_000) as u64;
+    let raw_out = (amount_in as u128)
+        .checked_mul(price_in).ok_or(Pfda3Error::Overflow)?
+        .checked_div(price_out).ok_or(Pfda3Error::DivisionByZero)?;
+    let amount_out = (raw_out.checked_mul(fee_factor).ok_or(Pfda3Error::Overflow)?
+        .checked_div(10_000).ok_or(Pfda3Error::DivisionByZero)?) as u64;
 
     if amount_out < min_out {
         return Err(Pfda3Error::SlippageExceeded.into());

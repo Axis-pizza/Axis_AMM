@@ -18,6 +18,7 @@ fn panic(_info: &core::panic::PanicInfo) -> ! {
 pub mod error;
 pub mod instructions;
 pub mod jupiter;
+pub mod security;
 pub mod math;
 pub mod state;
 

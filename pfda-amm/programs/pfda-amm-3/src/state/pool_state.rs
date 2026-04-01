@@ -19,14 +19,20 @@ pub struct PoolState3 {
     pub current_batch_id: u64,
     /// Current batch window end slot
     pub current_window_end: u64,
+    /// Protocol treasury (receives auction bids + protocol fee share)
+    pub treasury: [u8; 32],
+    /// Pool authority (creator, can pause/update)
+    pub authority: [u8; 32],
     /// Base fee in basis points
     pub base_fee_bps: u16,
     /// PDA bump
     pub bump: u8,
     /// Reentrancy guard
     pub reentrancy_guard: u8,
+    /// Paused flag (1 = paused, 0 = active)
+    pub paused: u8,
     /// Padding
-    pub _padding: [u8; 4],
+    pub _padding: [u8; 3],
 }
 
 impl PoolState3 {

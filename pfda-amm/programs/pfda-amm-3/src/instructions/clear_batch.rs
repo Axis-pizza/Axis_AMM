@@ -38,7 +38,7 @@ pub fn process_clear_batch_3(program_id: &Pubkey, accounts: &[AccountInfo]) -> P
     let current_slot = Clock::get()?.slot;
 
     // Load pool state
-    let (batch_id, window_end, reserves, weights, window_slots, base_fee_bps, pool_key) = {
+    let (batch_id, window_end, reserves, weights, window_slots, base_fee_bps, pool_key, treasury) = {
         let data = pool_ai.try_borrow_data()?;
         let pool = unsafe { load::<PoolState3>(&data) }
             .ok_or(ProgramError::InvalidAccountData)?;
@@ -47,6 +47,9 @@ pub fn process_clear_batch_3(program_id: &Pubkey, accounts: &[AccountInfo]) -> P
         }
         if pool.reentrancy_guard != 0 {
             return Err(Pfda3Error::ReentrancyDetected.into());
+        }
+        if pool.paused != 0 {
+            return Err(Pfda3Error::PoolPaused.into());
         }
         if current_slot < pool.current_window_end {
             return Err(Pfda3Error::BatchWindowNotEnded.into());
@@ -59,8 +62,18 @@ pub fn process_clear_batch_3(program_id: &Pubkey, accounts: &[AccountInfo]) -> P
             pool.window_slots,
             pool.base_fee_bps,
             *pool_ai.key(),
+            pool.treasury,
         )
     };
+
+    // Validate treasury if provided (accounts[6])
+    if accounts.len() > 6 {
+        let treasury_ai = &accounts[6];
+        if treasury_ai.key().as_ref() != &treasury {
+            release_guard(pool_ai)?;
+            return Err(Pfda3Error::TreasuryMismatch.into());
+        }
+    }
 
     // Set reentrancy guard
     {
@@ -107,11 +120,11 @@ pub fn process_clear_batch_3(program_id: &Pubkey, accounts: &[AccountInfo]) -> P
     // Price of token i in numeraire (token 0):
     //   spot_price_i = (R_0 * W_i) / (R_i * W_0)
     let r0 = reserves[0].max(1) as u128;
-    let w0 = weights[0] as u128;
+    let w0 = weights[0].max(1) as u128;
 
     for i in 0..3 {
         let ri = reserves[i].max(1) as u128;
-        let wi = weights[i] as u128;
+        let wi = weights[i].max(1) as u128;
 
         let price_fp = if i == 0 {
             1u64 << 32 // 1.0 for the numeraire

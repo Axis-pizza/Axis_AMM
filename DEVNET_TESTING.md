@@ -2,12 +2,13 @@
 
 ## What This Is
 
-Two on-chain ETF programs deployed to Solana devnet for the Axis Protocol A/B test. The goal is to compare a **PFDA batch auction** (ETF A) against a **G3M continuous AMM** (ETF B) under real conditions.
+Four on-chain programs deployed to Solana devnet for the Axis Protocol A/B test. The goal is to compare a **PFDA batch auction** (ETF A) against a **G3M continuous AMM** (ETF B) under real conditions.
 
 - **ETF A** batches swaps into windows and clears them at a single price (MEV protection)
 - **ETF B** executes swaps continuously against a geometric mean invariant (standard AMM)
+- **Vault** manages ETF token lifecycle: deposit basket tokens, receive ETF tokens; burn ETF tokens, receive basket back
 
-Both programs accept **any SPL tokens** — the token choice is a deployment-time decision, not hardcoded.
+All programs accept **any SPL tokens** — the token choice is a deployment-time decision, not hardcoded.
 
 ---
 
@@ -18,6 +19,7 @@ Both programs accept **any SPL tokens** — the token choice is a deployment-tim
 | **pfda-amm** | `CSBgQGeBTiAu4a9Kgoas2GyR8wbHg5jxctQjq3AenKk` | ETF A: 2-token PFDA batch auction (Muse's original + Switchboard + Jito) |
 | **pfda-amm-3** | `DbAPmgkrpCCZrpBMv5x1ye6nJUreqY313SuQjZsMyjEf` | ETF A: 3-token PFDA batch auction (for SOL/BONK/WIF or any 3 tokens) |
 | **axis-g3m** | `65aE9QdVz5bapV19BGt5cyTgVitYpekGwusRoQEovNUi` | ETF B: 5-token G3M AMM with drift-based rebalancing |
+| **axis-vault** | `DeeUnCHcnPG8arbjGTLhTKeDhpPUBper3TDrpFPHnCwy` | ETF token lifecycle: create, deposit/mint, withdraw/burn |
 
 Upgrade authority: `6t4B1TVgSjnAM9h5MpahLhGc9MtWFTGmcaPsy9JGskoV`
 
@@ -186,6 +188,7 @@ npm run bench
 # Build all programs
 cd pfda-amm && cargo build-sbf
 cd ../axis-g3m && cargo build-sbf
+cd ../axis-vault && cargo build-sbf
 
 # Run all unit tests
 cd ../pfda-amm && cargo test
@@ -246,6 +249,15 @@ SolanaAMM/
 │   │       ├── jupiter.rs            # Vault balance reader for Jupiter rebalance pattern
 │   │       └── error.rs              # Error codes 7000-7017
 │   └── client/                       # e2e tests (local + devnet)
+│
+├── axis-vault/                        # ETF token lifecycle
+│   ├── programs/axis-vault/
+│   │   └── src/
+│   │       ├── lib.rs                # Entrypoint (3 instructions)
+│   │       ├── instructions/         # CreateEtf, Deposit, Withdraw
+│   │       ├── state/etf.rs          # EtfState (basket config + ETF mint)
+│   │       └── error.rs              # Error codes 9000-9010
+│   └── (no client yet — coming soon)
 │
 ├── solana-tfmm-rs/                   # Economic simulation (Muse's, unchanged)
 ├── benchmark/                        # A/B CU comparison script

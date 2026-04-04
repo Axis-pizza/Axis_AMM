@@ -102,11 +102,13 @@ jobs:
           export PATH="$HOME/.local/share/solana/install/active_release/bin:$PATH"
           cargo build-sbf --manifest-path pfda-amm/Cargo.toml
           cargo build-sbf --manifest-path axis-g3m/Cargo.toml
+          cargo build-sbf --manifest-path axis-vault/Cargo.toml
 
       - name: Install e2e dependencies
         run: |
           npm ci --prefix pfda-amm/programs/pfda-amm-3/client
           npm ci --prefix axis-g3m/client
+          npm ci --prefix axis-vault/client
 
       - name: Run local validator e2e suites
         run: |
@@ -120,6 +122,7 @@ jobs:
             --ledger /tmp/solana-ci-ledger \
             --bpf-program DbAPmgkrpCCZrpBMv5x1ye6nJUreqY313SuQjZsMyjEf pfda-amm/target/deploy/pfda_amm_3.so \
             --bpf-program 65aE9QdVz5bapV19BGt5cyTgVitYpekGwusRoQEovNUi axis-g3m/target/deploy/axis_g3m.so \
+            --bpf-program DeeUnCHcnPG8arbjGTLhTKeDhpPUBper3TDrpFPHnCwy axis-vault/target/deploy/axis_vault.so \
             > /tmp/solana-test-validator.log 2>&1 &
           validator_pid=$!
 
@@ -140,6 +143,7 @@ jobs:
             npx --prefix pfda-amm/programs/pfda-amm-3/client ts-node \
             pfda-amm/programs/pfda-amm-3/client/e2e.ts
           npx --prefix axis-g3m/client ts-node axis-g3m/client/e2e.ts
+          RPC_URL=http://localhost:8899 npx --prefix axis-vault/client ts-node axis-vault/client/e2e.ts
 
       - name: Dump validator log on failure
         if: failure()

@@ -15,8 +15,8 @@ import * as fs from "fs";
 import * as os from "os";
 
 const PROGRAM_ID = new PublicKey("DeeUnCHcnPG8arbjGTLhTKeDhpPUBper3TDrpFPHnCwy");
-const RPC_URL = "https://api.devnet.solana.com";
-const ETF_NAME = "AXTEST";
+const RPC_URL = process.env.RPC_URL ?? "https://api.devnet.solana.com";
+const ETF_NAME = process.env.ETF_NAME ?? `AX${Date.now().toString(36).toUpperCase().slice(-10)}`;
 const TOKEN_COUNT = 3;
 const WEIGHTS = [3334, 3333, 3333]; // ~33.3% each, sums to 10000
 
@@ -37,6 +37,7 @@ async function main() {
 
   console.log("=== Axis Vault E2E Test (Devnet) ===");
   console.log("Wallet:", payer.publicKey.toBase58());
+  console.log("ETF Name:", ETF_NAME);
   console.log("Balance:", (await conn.getBalance(payer.publicKey)) / LAMPORTS_PER_SOL, "SOL\n");
 
   // 1. Create basket token mints + user accounts

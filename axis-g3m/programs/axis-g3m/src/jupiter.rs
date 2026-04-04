@@ -1,16 +1,13 @@
-/// Jupiter integration for G3M rebalancing.
+/// Helpers and constants for future Jupiter-backed rebalancing.
 ///
-/// Production pattern (two-step, used by most protocols):
-///   1. Keeper bot calls Jupiter API off-chain to get optimal swap route
-///   2. Keeper executes the Jupiter swap in a separate transaction
-///   3. Keeper calls our Rebalance instruction with the vault accounts
-///   4. On-chain: we read actual vault balances to verify the rebalance
-///   5. On-chain: we verify the G3M invariant is maintained
+/// Important: this module does not currently perform a Jupiter CPI.
+/// The live code path only exposes:
+///   - the Jupiter program id constant for future validation, and
+///   - SPL token vault balance readers used by the current rehearsal flow.
 ///
-/// This is safer than single-tx CPI because:
-///   - No dynamic account allocation in no_std
-///   - Jupiter's account layout varies per route (can't predict at compile time)
-///   - We verify the RESULT (vault balances) not the PROCESS (swap route)
+/// A real same-transaction Jupiter rebalance will need a follow-up instruction
+/// design that accepts route accounts and swap instruction data, then invokes
+/// Jupiter with the pool PDA as signer.
 ///
 /// Jupiter V6 program ID (for reference/validation):
 ///   JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4

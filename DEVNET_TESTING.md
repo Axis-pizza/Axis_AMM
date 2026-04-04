@@ -18,7 +18,7 @@ All programs accept **any SPL tokens** — the token choice is a deployment-time
 |---|---|---|
 | **pfda-amm** | `CSBgQGeBTiAu4a9Kgoas2GyR8wbHg5jxctQjq3AenKk` | Legacy: 2-token PFDA (Muse's original + Switchboard + Jito). Kept as regression test. |
 | **pfda-amm-3** | `DbAPmgkrpCCZrpBMv5x1ye6nJUreqY313SuQjZsMyjEf` | **Canonical ETF A**: 3-token PFDA batch auction with Switchboard oracle bounding + Jito bid/treasury |
-| **axis-g3m** | `65aE9QdVz5bapV19BGt5cyTgVitYpekGwusRoQEovNUi` | **Canonical ETF B**: 5-token G3M AMM with keeper-triggered drift-based rebalancing |
+| **axis-g3m** | `65aE9QdVz5bapV19BGt5cyTgVitYpekGwusRoQEovNUi` | **Current ETF B rehearsal**: 5-token G3M AMM with drift detection plus manual/state-sync rebalance |
 | **axis-vault** | `DeeUnCHcnPG8arbjGTLhTKeDhpPUBper3TDrpFPHnCwy` | ETF token lifecycle: create, deposit/mint, withdraw/burn |
 
 Upgrade authority: `6t4B1TVgSjnAM9h5MpahLhGc9MtWFTGmcaPsy9JGskoV`
@@ -39,7 +39,7 @@ npx ts-node e2e.ts               # Basic path without oracle/bid (faster, for qu
 RPC_URL=http://localhost:8899 WINDOW_SLOTS=10 npx ts-node e2e.ts   # Local validator equivalent used in CI
 ```
 
-### ETF B: 5-Token G3M (axis-g3m)
+### ETF B: 5-Token G3M Rehearsal (axis-g3m)
 
 ```bash
 cd axis-g3m/client
@@ -54,7 +54,7 @@ The ETF B devnet script now uses a fresh funded run authority each time, so it i
 ```bash
 cd scripts
 npm install
-npx ts-node run-ab-rehearsal.ts   # Runs both ETF A + ETF B canonical flows
+npx ts-node run-ab-rehearsal.ts   # Runs ETF A canonical flow + current ETF B rehearsal
 ```
 
 ---
@@ -148,7 +148,7 @@ Treasury delta: +1,000,000 lamports (0.001 SOL bid)
 
 ## ETF B Details: 5-Token G3M AMM
 
-**Rebalancing semantics: keeper-triggered on threshold breach.** The on-chain program computes drift but does not automatically execute rebalancing in the same transaction. Instead, a keeper bot monitors drift via the `CheckDrift` instruction and triggers `Rebalance` when the threshold is exceeded. This avoids the complexity and attack surface of on-chain Jupiter CPI.
+**Status:** this is the current ETF B rehearsal path, not the full March 2026 spec implementation. The original spec calls for same-transaction automatic Jupiter-backed rebalancing when drift breaches 5%. The deployed `axis-g3m` program currently exercises drift detection plus a rebalance state update, but it does not perform a live Jupiter CPI on devnet.
 
 The test (`e2e-devnet.ts`) exercises:
 
@@ -158,7 +158,7 @@ The test (`e2e-devnet.ts`) exercises:
 4. **CheckDrift — returns structured data: max_drift_bps, token index, threshold, needs_rebalance**
 5. Executes a large swap (200 tokens) to push drift above 5%
 6. **CheckDrift again — shows threshold exceeded**
-7. Rebalances the pool back to target weights
+7. Rehearses the rebalance state transition back toward target weights
 
 **Expected output:**
 ```
@@ -181,10 +181,10 @@ Maintains `∏ x_i^{w_i} = k` where x_i are reserves and w_i are target weights.
 ### Drift-Based Rebalancing
 
 - Drift = |actual_weight - target_weight| / target_weight (in basis points)
-- When any token's drift exceeds the threshold (default 5%), the pool is eligible for keeper rebalance
-- Keeper executes Jupiter swaps off-chain, then calls `Rebalance` on-chain to update state
-- On-chain: verifies reserves, recomputes invariant k, enforces cooldown
-- This is the two-step pattern used by production protocols (Drift, Mango, etc.)
+- When any token's drift exceeds the threshold (default 5%), the pool is eligible for rebalance
+- `CheckDrift` returns the structured trigger signal used by the rehearsal scripts
+- `Rebalance` currently updates pool state and recomputes invariant `k`
+- A true Jupiter-routed same-transaction CPI rebalance remains a follow-up implementation
 
 ---
 
@@ -279,7 +279,7 @@ SolanaAMM/
 │   │
 │   └── client/                       # Legacy 2-token e2e + oracle test
 │
-├── axis-g3m/                         # ★ Canonical ETF B: 5-token G3M
+├── axis-g3m/                         # ★ Current ETF B rehearsal: 5-token G3M
 │   ├── programs/axis-g3m/
 │   │   └── src/
 │   │       ├── instructions/         # InitializePool, Swap, CheckDrift, Rebalance

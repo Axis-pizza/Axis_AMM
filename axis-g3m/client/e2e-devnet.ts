@@ -496,8 +496,8 @@ async function main() {
 
   // ── 9. Rebalance ───────────────────────────────────────────────────────
   console.log("▶ Step 9: Rebalance (restore to target weights)");
-  // For testing, compute target reserves: total_value / 5 per token
-  // In production, this would come from Jupiter quotes
+  // Rehearsal path: compute synthetic target reserves from the current pool.
+  // The original ETF B spec instead calls for same-transaction Jupiter routing.
   const totalReserve = poolAfterBigSwap.reserves.reduce((a, b) => a + b, 0n);
   const avgReserve = totalReserve / BigInt(TOKEN_COUNT);
   const targetReserves = Array(TOKEN_COUNT).fill(avgReserve);

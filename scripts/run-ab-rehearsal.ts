@@ -1,8 +1,8 @@
 /**
  * Axis Protocol — A/B Test Rehearsal Script
  *
- * One-command orchestrator that runs both ETF A and ETF B canonical
- * devnet flows and prints a compact summary.
+ * One-command orchestrator that runs the ETF A canonical devnet flow and the
+ * current ETF B rehearsal flow, then prints a compact summary.
  *
  * Usage:
  *   npx ts-node run-ab-rehearsal.ts [--collect]
@@ -479,7 +479,7 @@ async function main() {
   console.log(`  Result     : ${etfA.pass ? "PASS" : "FAIL"}\n`);
 
   // ─── ETF B ──────────────────────────────────────────────────────────────
-  console.log("━━━ ETF B: 5-Token G3M (keeper-triggered rebalance) ━━━━━");
+  console.log("━━━ ETF B: 5-Token G3M (current rehearsal path) ━━━━━━━━━");
   console.log(`Program: ${G3M_PROGRAM_ID.toBase58()}`);
   const etfB = await runEtfB(conn, payer);
 

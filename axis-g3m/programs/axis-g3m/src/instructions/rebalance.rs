@@ -11,17 +11,15 @@ use crate::jupiter::read_vault_balance;
 use crate::math::compute_invariant;
 use crate::state::G3mPoolState;
 
-/// Rebalance — execute when drift exceeds threshold.
+/// Rebalance — current rehearsal/state-sync path when drift exceeds threshold.
 ///
-/// Two-step rebalance pattern (Jupiter integration):
-///   1. Keeper executes Jupiter swap(s) off-chain to move tokens between vaults
-///   2. Keeper calls this instruction, passing vault accounts
-///   3. On-chain: reads actual vault SPL token balances
-///   4. On-chain: updates reserves to match real balances
-///   5. On-chain: verifies G3M invariant maintained within 1% tolerance
+/// This instruction does not execute a Jupiter CPI today. It only supports
+/// updating reserves from either:
+///   1. the actual SPL vault balances passed in the accounts list, or
+///   2. caller-supplied reserve values used by the current rehearsal scripts.
 ///
-/// This is trustless — we don't trust the keeper's claimed reserves,
-/// we read the actual on-chain token balances.
+/// A future spec-aligned implementation should replace the fallback attestation
+/// path with a same-transaction Jupiter CPI plus post-swap vault verification.
 ///
 /// Accounts:
 ///   0: authority     (signer, must be pool authority)

@@ -69,11 +69,11 @@ The `ClearBatch` instruction consumes a completely flat ~38,000 CUs regardless o
 |---|---|---|
 | **pfda-amm** | `pfda-amm/programs/pfda-amm/` | Legacy: 2-token PFDA with Switchboard + Jito (regression tests) |
 | **pfda-amm-3** | `pfda-amm/programs/pfda-amm-3/` | **Canonical ETF A**: 3-token PFDA with oracle bounding + bid/treasury |
-| **axis-g3m** | `axis-g3m/programs/axis-g3m/` | **Canonical ETF B**: 5-token G3M with keeper-triggered drift rebalancing |
+| **axis-g3m** | `axis-g3m/programs/axis-g3m/` | **Current ETF B rehearsal**: 5-token G3M with drift detection plus manual/state-sync rebalance |
 | **axis-vault** | `axis-vault/programs/axis-vault/` | ETF token lifecycle: create, deposit/mint, withdraw/burn |
 | **solana-tfmm-rs** | `solana-tfmm-rs/` | Python/Rust simulation engine for LVR calculations |
 
-### Quick Start: Run the A/B Test on Devnet
+### Quick Start: Run the Current A/B Rehearsal on Devnet
 
 ```bash
 # ETF A (3-token PFDA with oracle + bid):
@@ -82,12 +82,14 @@ cd pfda-amm/programs/pfda-amm-3/client && npm install && npx ts-node oracle-bid-
 # ETF A local-validator path (same 3-token PFDA flow, no oracle feeds):
 cd pfda-amm/programs/pfda-amm-3/client && npm install && RPC_URL=http://localhost:8899 WINDOW_SLOTS=10 npx ts-node e2e.ts
 
-# ETF B (5-token G3M):
+# ETF B (5-token G3M rehearsal path):
 cd axis-g3m/client && npm install && npx ts-node e2e-devnet.ts
 
 # One-command rehearsal:
 cd scripts && npm install && npx ts-node run-ab-rehearsal.ts
 ```
+
+Note: ETF A is the current canonical A/B path in this repo. ETF B currently validates the G3M pool, drift detection, and rebalance state-transition path, but it does not yet implement the original spec's same-transaction Jupiter CPI auto-rebalance.
 
 See [DEVNET_TESTING.md](DEVNET_TESTING.md) for the full testing guide.
 

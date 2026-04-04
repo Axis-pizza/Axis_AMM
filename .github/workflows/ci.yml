@@ -129,12 +129,12 @@ jobs:
           trap cleanup EXIT
 
           export SOLANA_URL=http://localhost:8899
-          until solana cluster-version >/dev/null 2>&1; do
+          solana config set --url localhost
+          until solana -u localhost cluster-version >/dev/null 2>&1; do
             sleep 1
           done
 
-          solana config set --url localhost
-          solana airdrop 100
+          solana -u localhost airdrop 100
 
           npx --prefix pfda-amm/client ts-node pfda-amm/client/e2e.ts
           npx --prefix axis-g3m/client ts-node axis-g3m/client/e2e.ts

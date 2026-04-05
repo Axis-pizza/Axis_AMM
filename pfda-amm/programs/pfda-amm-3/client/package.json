@@ -1,0 +1,19 @@
+{
+  "name": "pfda-amm-3-client",
+  "version": "0.1.0",
+  "scripts": {
+    "e2e": "ts-node e2e.ts",
+    "e2e:local": "RPC_URL=http://localhost:8899 WINDOW_SLOTS=10 ts-node e2e.ts",
+    "e2e:oracle-bid": "ts-node oracle-bid-e2e.ts",
+    "o1-proof": "ts-node test-o1-proof.ts"
+  },
+  "dependencies": {
+    "@solana/spl-token": "^0.4.9",
+    "@solana/web3.js": "^1.95.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.7"
+  }
+}

@@ -1,0 +1,333 @@
+/**
+ * PFDA AMM 3-Token — E2E Test
+ *
+ * Tests the full 3-token batch auction cycle:
+ *   1. Create 3 token mints (any arbitrary SPL tokens)
+ *   2. Create user accounts + mint supply
+ *   3. Pre-allocate vault accounts
+ *   4. InitializePool (3 tokens, 33.3% each, 10-slot window)
+ *   5. Add liquidity (direct token transfers to vaults)
+ *   6. SwapRequest (token 0 → token 1)
+ *   7. Wait for batch window to end
+ *   8. ClearBatch (O(1) settlement)
+ *   9. Claim output tokens
+ */
+
+import {
+  Connection, Keypair, PublicKey, SystemProgram, Transaction,
+  TransactionInstruction, sendAndConfirmTransaction, LAMPORTS_PER_SOL,
+} from "@solana/web3.js";
+import {
+  createMint, createAccount, createInitializeAccountInstruction,
+  mintTo, getAccount, TOKEN_PROGRAM_ID, ACCOUNT_SIZE,
+  getMinimumBalanceForRentExemptAccount,
+} from "@solana/spl-token";
+import * as fs from "fs";
+import * as os from "os";
+
+const PROGRAM_ID = new PublicKey(process.env.PROGRAM_ID ?? "DbAPmgkrpCCZrpBMv5x1ye6nJUreqY313SuQjZsMyjEf");
+const RPC_URL = process.env.RPC_URL ?? "https://api.devnet.solana.com";
+
+const WINDOW_SLOTS = BigInt(process.env.WINDOW_SLOTS ?? (RPC_URL.includes("localhost") ? "10" : "100"));
+const BASE_FEE_BPS = 30;
+// Equal weights: 333_333 + 333_333 + 333_334 = 1_000_000
+const WEIGHTS = [333_333, 333_333, 333_334];
+
+function loadPayer(): Keypair {
+  const path = `${os.homedir()}/.config/solana/id.json`;
+  return Keypair.fromSecretKey(Uint8Array.from(JSON.parse(fs.readFileSync(path, "utf-8"))));
+}
+
+function u64Le(n: bigint): Buffer { const b = Buffer.alloc(8); b.writeBigUInt64LE(n); return b; }
+function u32Le(n: number): Buffer { const b = Buffer.alloc(4); b.writeUInt32LE(n); return b; }
+function u16Le(n: number): Buffer { const b = Buffer.alloc(2); b.writeUInt16LE(n); return b; }
+
+// PDA derivations
+function findPool(mint0: PublicKey, mint1: PublicKey, mint2: PublicKey) {
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from("pool3"), mint0.toBuffer(), mint1.toBuffer(), mint2.toBuffer()],
+    PROGRAM_ID
+  );
+}
+function findQueue(pool: PublicKey, batchId: bigint) {
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from("queue3"), pool.toBuffer(), u64Le(batchId)], PROGRAM_ID
+  );
+}
+function findHistory(pool: PublicKey, batchId: bigint) {
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from("history3"), pool.toBuffer(), u64Le(batchId)], PROGRAM_ID
+  );
+}
+function findTicket(pool: PublicKey, user: PublicKey, batchId: bigint) {
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from("ticket3"), pool.toBuffer(), user.toBuffer(), u64Le(batchId)], PROGRAM_ID
+  );
+}
+
+// Instruction builders
+function ixInitPool(
+  payer: PublicKey, pool: PublicKey, queue: PublicKey,
+  mints: PublicKey[], vaults: PublicKey[], treasury: PublicKey,
+): TransactionInstruction {
+  const data = Buffer.concat([
+    Buffer.from([0]),           // disc
+    u16Le(BASE_FEE_BPS),
+    u64Le(WINDOW_SLOTS),
+    u32Le(WEIGHTS[0]),
+    u32Le(WEIGHTS[1]),
+    u32Le(WEIGHTS[2]),
+  ]);
+  return new TransactionInstruction({
+    programId: PROGRAM_ID,
+    keys: [
+      { pubkey: payer, isSigner: true, isWritable: true },
+      { pubkey: pool, isSigner: false, isWritable: true },
+      { pubkey: queue, isSigner: false, isWritable: true },
+      { pubkey: mints[0], isSigner: false, isWritable: false },
+      { pubkey: mints[1], isSigner: false, isWritable: false },
+      { pubkey: mints[2], isSigner: false, isWritable: false },
+      { pubkey: vaults[0], isSigner: false, isWritable: true },
+      { pubkey: vaults[1], isSigner: false, isWritable: true },
+      { pubkey: vaults[2], isSigner: false, isWritable: true },
+      { pubkey: treasury, isSigner: false, isWritable: false },
+      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+      { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+    ],
+    data,
+  });
+}
+
+function ixSwapRequest(
+  user: PublicKey, pool: PublicKey, queue: PublicKey, ticket: PublicKey,
+  userToken: PublicKey, vault: PublicKey,
+  inIdx: number, amountIn: bigint, outIdx: number, minOut: bigint,
+): TransactionInstruction {
+  const data = Buffer.concat([
+    Buffer.from([1]),
+    Buffer.from([inIdx]),
+    u64Le(amountIn),
+    Buffer.from([outIdx]),
+    u64Le(minOut),
+  ]);
+  return new TransactionInstruction({
+    programId: PROGRAM_ID,
+    keys: [
+      { pubkey: user, isSigner: true, isWritable: true },
+      { pubkey: pool, isSigner: false, isWritable: false },
+      { pubkey: queue, isSigner: false, isWritable: true },
+      { pubkey: ticket, isSigner: false, isWritable: true },
+      { pubkey: userToken, isSigner: false, isWritable: true },
+      { pubkey: vault, isSigner: false, isWritable: true },
+      { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+    ],
+    data,
+  });
+}
+
+function ixClearBatch(
+  cranker: PublicKey, pool: PublicKey, queue: PublicKey,
+  history: PublicKey, nextQueue: PublicKey,
+): TransactionInstruction {
+  return new TransactionInstruction({
+    programId: PROGRAM_ID,
+    keys: [
+      { pubkey: cranker, isSigner: true, isWritable: true },
+      { pubkey: pool, isSigner: false, isWritable: true },
+      { pubkey: queue, isSigner: false, isWritable: true },
+      { pubkey: history, isSigner: false, isWritable: true },
+      { pubkey: nextQueue, isSigner: false, isWritable: true },
+      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+    ],
+    data: Buffer.from([2]),
+  });
+}
+
+function ixClaim(
+  user: PublicKey, pool: PublicKey, history: PublicKey, ticket: PublicKey,
+  vaults: PublicKey[], userTokens: PublicKey[],
+): TransactionInstruction {
+  return new TransactionInstruction({
+    programId: PROGRAM_ID,
+    keys: [
+      { pubkey: user, isSigner: true, isWritable: false },
+      { pubkey: pool, isSigner: false, isWritable: false },
+      { pubkey: history, isSigner: false, isWritable: false },
+      { pubkey: ticket, isSigner: false, isWritable: true },
+      { pubkey: vaults[0], isSigner: false, isWritable: true },
+      { pubkey: vaults[1], isSigner: false, isWritable: true },
+      { pubkey: vaults[2], isSigner: false, isWritable: true },
+      { pubkey: userTokens[0], isSigner: false, isWritable: true },
+      { pubkey: userTokens[1], isSigner: false, isWritable: true },
+      { pubkey: userTokens[2], isSigner: false, isWritable: true },
+      { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+    ],
+    data: Buffer.from([3]),
+  });
+}
+
+async function getCU(conn: Connection, sig: string): Promise<number | null> {
+  const tx = await conn.getTransaction(sig, { maxSupportedTransactionVersion: 0, commitment: "confirmed" });
+  return tx?.meta?.computeUnitsConsumed ?? null;
+}
+
+async function waitForSlot(conn: Connection, target: bigint) {
+  process.stdout.write(`  Waiting for slot ${target}...`);
+  while (true) {
+    const s = BigInt(await conn.getSlot("confirmed"));
+    if (s >= target) { console.log(` at slot ${s}`); return; }
+    await new Promise(r => setTimeout(r, 400));
+  }
+}
+
+async function main() {
+  const conn = new Connection(RPC_URL, "confirmed");
+  const payer = loadPayer();
+
+  console.log("╔══════════════════════════════════════════════════╗");
+  console.log("║  PFDA AMM 3-Token — E2E Test                     ║");
+  console.log("╚══════════════════════════════════════════════════╝");
+  console.log(`Wallet  : ${payer.publicKey.toBase58()}`);
+  console.log(`Program : ${PROGRAM_ID.toBase58()}`);
+  console.log(`RPC     : ${RPC_URL}`);
+  const bal = await conn.getBalance(payer.publicKey);
+  console.log(`Balance : ${(bal / LAMPORTS_PER_SOL).toFixed(2)} SOL\n`);
+
+  const cuLog: Record<string, number | null> = {};
+
+  // 1. Create 3 mints
+  console.log("▶ Step 1: Create 3 token mints");
+  const mints: PublicKey[] = [];
+  for (let i = 0; i < 3; i++) {
+    const mint = await createMint(conn, payer, payer.publicKey, null, 6);
+    mints.push(mint);
+    console.log(`  Mint ${i}: ${mint.toBase58()}`);
+  }
+
+  // 2. User accounts + mint
+  console.log("\n▶ Step 2: Create user accounts + mint supply");
+  const userAccounts: PublicKey[] = [];
+  const SUPPLY = 10_000_000_000n;
+  for (let i = 0; i < 3; i++) {
+    const ata = await createAccount(conn, payer, mints[i], payer.publicKey);
+    await mintTo(conn, payer, mints[i], ata, payer, SUPPLY);
+    userAccounts.push(ata);
+  }
+  console.log(`  Created 3 accounts, ${SUPPLY} lamports each`);
+
+  // 3. PDAs
+  const [pool] = findPool(mints[0], mints[1], mints[2]);
+  const [queue0] = findQueue(pool, 0n);
+  const [history0] = findHistory(pool, 0n);
+  const [queue1] = findQueue(pool, 1n);
+  const [ticket] = findTicket(pool, payer.publicKey, 0n);
+  console.log(`\n▶ Step 3: PDAs`);
+  console.log(`  Pool   : ${pool.toBase58()}`);
+  console.log(`  Queue0 : ${queue0.toBase58()}`);
+
+  // 4. Vault accounts
+  console.log("\n▶ Step 4: Create vault accounts (owned by pool PDA)");
+  const rentExempt = await getMinimumBalanceForRentExemptAccount(conn);
+  const vaultKps: Keypair[] = [];
+  const vaults: PublicKey[] = [];
+  const createVaultsTx = new Transaction();
+  for (let i = 0; i < 3; i++) {
+    const kp = Keypair.generate();
+    vaultKps.push(kp);
+    vaults.push(kp.publicKey);
+    createVaultsTx.add(
+      SystemProgram.createAccount({
+        fromPubkey: payer.publicKey,
+        newAccountPubkey: kp.publicKey,
+        lamports: rentExempt,
+        space: ACCOUNT_SIZE,
+        programId: TOKEN_PROGRAM_ID,
+      }),
+    );
+  }
+  await sendAndConfirmTransaction(conn, createVaultsTx, [payer, ...vaultKps]);
+  for (let i = 0; i < 3; i++) console.log(`  Vault ${i}: ${vaults[i].toBase58()}`);
+
+  // 5. InitializePool
+  console.log("\n▶ Step 5: InitializePool (3 tokens, 33.3% each)");
+  const initSig = await sendAndConfirmTransaction(conn,
+    new Transaction().add(ixInitPool(payer.publicKey, pool, queue0, mints, vaults, payer.publicKey)),
+    [payer]
+  );
+  cuLog["InitPool"] = await getCU(conn, initSig);
+  console.log(`  CU: ${cuLog["InitPool"]?.toLocaleString()}`);
+
+  // Read pool to get window end
+  const poolData = (await conn.getAccountInfo(pool))!.data;
+  const windowEnd = poolData.readBigUInt64LE(256);
+  console.log(`  Window ends: slot ${windowEnd}`);
+
+  // 5b. Add liquidity (direct transfer to vaults since pool is initialized)
+  console.log("\n▶ Step 5b: Add liquidity (transfer to vaults)");
+  const LIQ = 1_000_000_000n;
+  for (let i = 0; i < 3; i++) {
+    const transferIx = new TransactionInstruction({
+      programId: TOKEN_PROGRAM_ID,
+      keys: [
+        { pubkey: userAccounts[i], isSigner: false, isWritable: true },
+        { pubkey: vaults[i], isSigner: false, isWritable: true },
+        { pubkey: payer.publicKey, isSigner: true, isWritable: false },
+      ],
+      data: Buffer.concat([Buffer.from([3]), u64Le(LIQ)]), // SPL Transfer discriminant
+    });
+    await sendAndConfirmTransaction(conn, new Transaction().add(transferIx), [payer]);
+  }
+  console.log(`  Transferred ${LIQ} to each vault`);
+
+  // 6. SwapRequest (token 0 → token 1)
+  console.log("\n▶ Step 6: SwapRequest (10 tokens: token 0 → token 1)");
+  const SWAP = 10_000_000n;
+  const swapSig = await sendAndConfirmTransaction(conn,
+    new Transaction().add(
+      ixSwapRequest(payer.publicKey, pool, queue0, ticket, userAccounts[0], vaults[0], 0, SWAP, 1, 0n)
+    ),
+    [payer]
+  );
+  cuLog["SwapRequest"] = await getCU(conn, swapSig);
+  console.log(`  CU: ${cuLog["SwapRequest"]?.toLocaleString()}`);
+
+  // 7. Wait for window
+  console.log("\n▶ Step 7: Wait for batch window to end");
+  await waitForSlot(conn, windowEnd);
+
+  // 8. ClearBatch
+  console.log("\n▶ Step 8: ClearBatch (O(1) settlement)");
+  const clearSig = await sendAndConfirmTransaction(conn,
+    new Transaction().add(ixClearBatch(payer.publicKey, pool, queue0, history0, queue1)),
+    [payer]
+  );
+  cuLog["ClearBatch"] = await getCU(conn, clearSig);
+  console.log(`  CU: ${cuLog["ClearBatch"]?.toLocaleString()} ★`);
+
+  // 9. Claim
+  console.log("\n▶ Step 9: Claim");
+  const beforeBal = (await getAccount(conn, userAccounts[1])).amount;
+  const claimSig = await sendAndConfirmTransaction(conn,
+    new Transaction().add(ixClaim(payer.publicKey, pool, history0, ticket, vaults, userAccounts)),
+    [payer]
+  );
+  cuLog["Claim"] = await getCU(conn, claimSig);
+  const afterBal = (await getAccount(conn, userAccounts[1])).amount;
+  console.log(`  CU: ${cuLog["Claim"]?.toLocaleString()}`);
+  console.log(`  Token 1 received: ${(afterBal - beforeBal).toLocaleString()}`);
+
+  // Summary
+  console.log("\n╔══════════════════════════════════════════════════╗");
+  console.log("║              CU Summary                          ║");
+  console.log("╠══════════════════════════════════════════════════╣");
+  for (const [label, cu] of Object.entries(cuLog)) {
+    console.log(`║  ${label.padEnd(14)}: ${String(cu?.toLocaleString() ?? "N/A").padStart(7)} CU`);
+  }
+  console.log("╚══════════════════════════════════════════════════╝");
+}
+
+main().catch(err => {
+  console.error("\n✗ Error:", err);
+  process.exit(1);
+});

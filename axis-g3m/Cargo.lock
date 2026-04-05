@@ -3,6 +3,15 @@
 version = 4
 
 [[package]]
+name = "axis-g3m"
+version = "0.1.0"
+dependencies = [
+ "pinocchio",
+ "pinocchio-system",
+ "pinocchio-token",
+]
+
+[[package]]
 name = "five8_const"
 version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -18,28 +27,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2551bf44bc5f776c15044b9b94153a00198be06743e262afaaa61f11ac7523a5"
 
 [[package]]
-name = "pfda-amm"
-version = "0.1.0"
-dependencies = [
- "pinocchio",
- "pinocchio-system",
- "pinocchio-token",
-]
-
-[[package]]
-name = "pfda-amm-3"
-version = "0.1.0"
-dependencies = [
- "pinocchio",
- "pinocchio-system",
- "pinocchio-token",
-]
-
-[[package]]
 name = "pinocchio"
-version = "0.9.2"
+version = "0.9.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5b971851087bc3699b001954ad02389d50c41405ece3548cbcafc88b3e20017a"
+checksum = "b8afe4f39c0e25cc471b35b89963312791a5162d45a86578cbeaad9e5e7d1b3b"
 
 [[package]]
 name = "pinocchio-pubkey"

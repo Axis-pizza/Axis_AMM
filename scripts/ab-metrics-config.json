@@ -1,0 +1,17 @@
+{
+  "rpc_url": "https://api.devnet.solana.com",
+  "poll_interval_ms": 30000,
+  "output_dir": "metrics",
+  "etf_a": {
+    "program_id": "DbAPmgkrpCCZrpBMv5x1ye6nJUreqY313SuQjZsMyjEf",
+    "label": "ETF A: 3-token PFDA",
+    "pool_address": "",
+    "treasury_address": "",
+    "oracle_feed": "BV9mGAy5MJLYWJT5HF74izYKjF9CmL4BqkswfTu9gW2w"
+  },
+  "etf_b": {
+    "program_id": "65aE9QdVz5bapV19BGt5cyTgVitYpekGwusRoQEovNUi",
+    "label": "ETF B: 5-token G3M",
+    "pool_address": ""
+  }
+}

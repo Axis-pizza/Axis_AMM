@@ -16,7 +16,9 @@ fn panic(_info: &core::panic::PanicInfo) -> ! {
 
 pub mod error;
 pub mod instructions;
+pub mod jito;
 pub mod math;
+pub mod oracle;
 pub mod state;
 
 use pinocchio::{
@@ -112,8 +114,16 @@ pub fn process_instruction(
         }
 
         Instruction::ClearBatch => {
-            // No additional data needed
-            instructions::process_clear_batch(program_id, accounts)
+            // Optional: [bid_lamports: u64 LE] — searcher's bid for clearing rights
+            let bid_lamports = if data.len() >= 8 {
+                u64::from_le_bytes([
+                    data[0], data[1], data[2], data[3],
+                    data[4], data[5], data[6], data[7],
+                ])
+            } else {
+                0 // No bid (backwards compatible)
+            };
+            instructions::process_clear_batch(program_id, accounts, bid_lamports)
         }
 
         Instruction::Claim => {

@@ -1,0 +1,151 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - axis/**
+
+permissions:
+  contents: read
+
+jobs:
+  rust-and-typescript:
+    name: Rust Tests, SBF Builds, and TS Checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Set up Rust
+        run: |
+          rustup update stable
+          rustup default stable
+
+      - name: Install Solana CLI
+        run: |
+          sh -c "$(curl -sSfL https://release.anza.xyz/stable/install)"
+          echo "$HOME/.local/share/solana/install/active_release/bin" >> "$GITHUB_PATH"
+          export PATH="$HOME/.local/share/solana/install/active_release/bin:$PATH"
+          solana --version
+          cargo-build-sbf --version
+
+      - name: Run Rust unit tests
+        run: |
+          cargo test --manifest-path pfda-amm/Cargo.toml
+          cargo test --manifest-path axis-g3m/Cargo.toml
+          cargo test --manifest-path axis-vault/Cargo.toml
+          cargo test --manifest-path solana-tfmm-rs/Cargo.toml
+
+      - name: Build Solana programs
+        run: |
+          export PATH="$HOME/.local/share/solana/install/active_release/bin:$PATH"
+          cargo build-sbf --manifest-path pfda-amm/Cargo.toml
+          cargo build-sbf --manifest-path axis-g3m/Cargo.toml
+          cargo build-sbf --manifest-path axis-vault/Cargo.toml
+
+      - name: Install TypeScript client dependencies
+        run: |
+          npm ci --prefix pfda-amm/client
+          npm ci --prefix pfda-amm/programs/pfda-amm-3/client
+          npm ci --prefix axis-g3m/client
+          npm ci --prefix axis-vault/client
+          npm ci --prefix scripts
+          npm ci --prefix benchmark
+
+      - name: Type-check TypeScript clients and scripts
+        run: |
+          npx --prefix pfda-amm/client tsc --noEmit -p pfda-amm/client/tsconfig.json
+          npx --prefix pfda-amm/programs/pfda-amm-3/client tsc --noEmit -p pfda-amm/programs/pfda-amm-3/client/tsconfig.json
+          npx --prefix axis-g3m/client tsc --noEmit -p axis-g3m/client/tsconfig.json
+          npx --prefix axis-vault/client tsc --noEmit -p axis-vault/client/tsconfig.json
+          npx --prefix scripts tsc --noEmit -p scripts/tsconfig.json
+          npx --prefix benchmark tsc --noEmit -p benchmark/tsconfig.json
+
+  local-e2e:
+    name: Local Validator E2E
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Set up Rust
+        run: |
+          rustup update stable
+          rustup default stable
+
+      - name: Install Solana CLI
+        run: |
+          sh -c "$(curl -sSfL https://release.anza.xyz/stable/install)"
+          echo "$HOME/.local/share/solana/install/active_release/bin" >> "$GITHUB_PATH"
+          export PATH="$HOME/.local/share/solana/install/active_release/bin:$PATH"
+          solana --version
+          cargo-build-sbf --version
+
+      - name: Build local validator programs
+        run: |
+          export PATH="$HOME/.local/share/solana/install/active_release/bin:$PATH"
+          cargo build-sbf --manifest-path pfda-amm/Cargo.toml
+          cargo build-sbf --manifest-path axis-g3m/Cargo.toml
+          cargo build-sbf --manifest-path axis-vault/Cargo.toml
+
+      - name: Install e2e dependencies
+        run: |
+          npm ci --prefix pfda-amm/programs/pfda-amm-3/client
+          npm ci --prefix axis-g3m/client
+          npm ci --prefix axis-vault/client
+
+      - name: Run local validator e2e suites
+        run: |
+          export PATH="$HOME/.local/share/solana/install/active_release/bin:$PATH"
+
+          mkdir -p "$HOME/.config/solana"
+          solana-keygen new --no-bip39-passphrase --silent -o "$HOME/.config/solana/id.json"
+
+          solana-test-validator \
+            --reset \
+            --ledger /tmp/solana-ci-ledger \
+            --bpf-program DbAPmgkrpCCZrpBMv5x1ye6nJUreqY313SuQjZsMyjEf pfda-amm/target/deploy/pfda_amm_3.so \
+            --bpf-program 65aE9QdVz5bapV19BGt5cyTgVitYpekGwusRoQEovNUi axis-g3m/target/deploy/axis_g3m.so \
+            --bpf-program DeeUnCHcnPG8arbjGTLhTKeDhpPUBper3TDrpFPHnCwy axis-vault/target/deploy/axis_vault.so \
+            > /tmp/solana-test-validator.log 2>&1 &
+          validator_pid=$!
+
+          cleanup() {
+            kill "$validator_pid" || true
+          }
+          trap cleanup EXIT
+
+          export SOLANA_URL=http://localhost:8899
+          solana config set --url localhost
+          until solana -u localhost cluster-version >/dev/null 2>&1; do
+            sleep 1
+          done
+
+          solana -u localhost airdrop 100
+
+          RPC_URL=http://localhost:8899 WINDOW_SLOTS=10 \
+            npx --prefix pfda-amm/programs/pfda-amm-3/client ts-node \
+            pfda-amm/programs/pfda-amm-3/client/e2e.ts
+          npx --prefix axis-g3m/client ts-node axis-g3m/client/e2e.ts
+          RPC_URL=http://localhost:8899 npx --prefix axis-vault/client ts-node axis-vault/client/e2e.ts
+
+      - name: Dump validator log on failure
+        if: failure()
+        run: |
+          test -f /tmp/solana-test-validator.log && cat /tmp/solana-test-validator.log

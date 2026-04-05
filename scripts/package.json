@@ -1,0 +1,19 @@
+{
+  "name": "axis-scripts",
+  "version": "0.1.0",
+  "scripts": {
+    "setup-feeds": "ts-node setup-switchboard-feeds.ts",
+    "rehearsal": "ts-node run-ab-rehearsal.ts",
+    "collect": "ts-node collect-ab-metrics.ts"
+  },
+  "dependencies": {
+    "@switchboard-xyz/on-demand": "^2.17.0",
+    "@solana/web3.js": "^1.95.3",
+    "@solana/spl-token": "^0.4.6"
+  },
+  "devDependencies": {
+    "@types/node": "^22",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.7"
+  }
+}

@@ -1,0 +1,3 @@
+[workspace]
+members = ["programs/axis-g3m"]
+resolver = "2"

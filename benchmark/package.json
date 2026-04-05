@@ -1,0 +1,16 @@
+{
+  "name": "axis-ab-benchmark",
+  "version": "0.1.0",
+  "scripts": {
+    "bench": "ts-node bench.ts"
+  },
+  "dependencies": {
+    "@solana/spl-token": "^0.4.9",
+    "@solana/web3.js": "^1.95.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.7"
+  }
+}

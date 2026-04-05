@@ -1,13 +1,18 @@
-name: Reusable Local E2E
+name: Reusable Local Validator Suite
 
 on:
   workflow_call:
+    inputs:
+      suite:
+        description: "Suite to run: e2e or benchmark"
+        required: true
+        type: string
 
 permissions:
   contents: read
 
 jobs:
-  local-e2e:
+  local-validator-suite:
     runs-on: ubuntu-latest
     timeout-minutes: 45
 
@@ -59,22 +64,37 @@ jobs:
       - name: Install JavaScript dependencies
         run: bun install --frozen-lockfile
 
+      - name: Validate suite selection
+        run: |
+          case "${{ inputs.suite }}" in
+            e2e|benchmark) ;;
+            *)
+              echo "Unsupported suite: ${{ inputs.suite }}"
+              exit 1
+              ;;
+          esac
+
       - name: Prepare local validator
         run: bash ci/e2e-local-prepare.sh
 
       - name: Run PFDA AMM Legacy local e2e
+        if: inputs.suite == 'e2e'
         run: bun run e2e:pfda-amm-legacy:local
 
       - name: Run PFDA AMM 3 local e2e
+        if: inputs.suite == 'e2e'
         run: bun run e2e:pfda-amm-3:local
 
       - name: Run Axis G3M local e2e
+        if: inputs.suite == 'e2e'
         run: bun run e2e:axis-g3m:local
 
       - name: Run Axis Vault local e2e
+        if: inputs.suite == 'e2e'
         run: bun run e2e:axis-vault:local
 
       - name: Run AB CU benchmark (local validator)
+        if: inputs.suite == 'benchmark'
         run: bun run bench:ab
 
       - name: Dump validator log on failure

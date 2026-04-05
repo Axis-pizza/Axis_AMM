@@ -32,6 +32,7 @@
     "ci:rust": "bash ci/job-rust.sh",
     "ci:typescript": "bash ci/job-typescript.sh",
     "ci:rust-and-typescript": "bash ci/job-rust-and-typescript.sh",
+    "ci:local-benchmark": "bash ci/job-local-benchmark.sh",
     "ci:local-e2e": "bash ci/job-local-e2e.sh",
     "ci:devnet-e2e": "bash ci/job-devnet-e2e.sh",
     "ci:ab-report": "bash ci/update-ab-report.sh"

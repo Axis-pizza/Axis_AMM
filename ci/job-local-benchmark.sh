@@ -12,7 +12,4 @@ cleanup() {
 trap cleanup EXIT
 
 bash ci/e2e-local-prepare.sh
-bun run e2e:pfda-amm-legacy:local
-bun run e2e:pfda-amm-3:local
-bun run e2e:axis-g3m:local
-bun run e2e:axis-vault:local
+bun run bench:ab

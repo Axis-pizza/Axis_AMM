@@ -23,6 +23,8 @@ describe("CI Structure", () => {
     expect(entryWorkflow).toContain(".github/workflows/reusable-rust.yml");
     expect(entryWorkflow).toContain(".github/workflows/reusable-typescript.yml");
     expect(entryWorkflow).toContain(".github/workflows/reusable-e2e-local.yml");
+    expect(entryWorkflow).toContain("suite: e2e");
+    expect(entryWorkflow).toContain("suite: benchmark");
     expect(entryWorkflow).toContain("cancel-in-progress: true");
   });
 
@@ -35,6 +37,9 @@ describe("CI Structure", () => {
     expect(tsWorkflow).toContain("bash ci/job-typescript.sh");
 
     expect(localE2eWorkflow).toContain("bash ci/e2e-local-prepare.sh");
+    expect(localE2eWorkflow).toContain("suite:");
+    expect(localE2eWorkflow).toContain("if: inputs.suite == 'e2e'");
+    expect(localE2eWorkflow).toContain("if: inputs.suite == 'benchmark'");
     expect(localE2eWorkflow).toContain("bun run e2e:pfda-amm-legacy:local");
     expect(localE2eWorkflow).toContain("bun run e2e:pfda-amm-3:local");
     expect(localE2eWorkflow).toContain("bun run e2e:axis-g3m:local");
@@ -57,6 +62,7 @@ describe("CI Structure", () => {
       "ci/job-typescript.sh",
       "ci/job-rust-and-typescript.sh",
       "ci/job-local-e2e.sh",
+      "ci/job-local-benchmark.sh",
       "ci/job-devnet-e2e.sh",
       "ci/e2e-local-prepare.sh",
       "ci/e2e-local-cleanup.sh",

@@ -1,0 +1,54 @@
+name: Reusable Local E2E
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  local-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.6"
+
+      - name: Set up Rust
+        run: bash ci/setup-rust.sh
+
+      - name: Install Solana CLI
+        run: bash ci/install-solana.sh
+
+      - name: Install JavaScript dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Prepare local validator
+        run: bash ci/e2e-local-prepare.sh
+
+      - name: Run PFDA AMM Legacy local e2e
+        run: bun run e2e:pfda-amm-legacy:local
+
+      - name: Run PFDA AMM 3 local e2e
+        run: bun run e2e:pfda-amm-3:local
+
+      - name: Run Axis G3M local e2e
+        run: bun run e2e:axis-g3m:local
+
+      - name: Run Axis Vault local e2e
+        run: bun run e2e:axis-vault:local
+
+      - name: Dump validator log on failure
+        if: failure()
+        run: |
+          test -f /tmp/solana-test-validator.log && cat /tmp/solana-test-validator.log
+
+      - name: Stop local validator
+        if: always()
+        run: bash ci/e2e-local-cleanup.sh

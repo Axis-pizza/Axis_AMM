@@ -1,0 +1,68 @@
+name: E2E Devnet (Manual)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  devnet-e2e:
+    name: Devnet E2E Suites
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.6"
+
+      - name: Set up Rust
+        run: bash ci/setup-rust.sh
+
+      - name: Install Solana CLI
+        run: bash ci/install-solana.sh
+
+      - name: Install JavaScript dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Configure devnet wallet from secret
+        if: ${{ secrets.SOLANA_DEVNET_KEYPAIR != '' }}
+        run: |
+          mkdir -p "$HOME/.config/solana"
+          printf '%s' '${{ secrets.SOLANA_DEVNET_KEYPAIR }}' > "$HOME/.config/solana/id.json"
+
+      - name: Configure generated devnet wallet
+        if: ${{ secrets.SOLANA_DEVNET_KEYPAIR == '' }}
+        run: |
+          mkdir -p "$HOME/.config/solana"
+          solana-keygen new --force --no-bip39-passphrase --silent -o "$HOME/.config/solana/id.json"
+          solana -u devnet airdrop 2 || echo "Devnet airdrop failed; continuing with current balance."
+
+      - name: Set devnet RPC
+        run: solana config set --url devnet
+
+      - name: Run Axis G3M devnet e2e
+        run: bun run e2e:axis-g3m:devnet
+
+      - name: Run PFDA AMM 3 oracle-bid devnet e2e
+        run: bun run e2e:pfda-amm-3:oracle-bid:devnet
+
+      - name: Run PFDA AMM 3 O(1) proof test
+        run: bun run test:pfda-amm-3:o1-proof
+
+      - name: Run PFDA AMM 3 imbalanced test
+        run: bun run test:pfda-amm-3:imbalanced
+
+      - name: Run PFDA AMM 3 multiuser test
+        run: bun run test:pfda-amm-3:multiuser
+
+      - name: Run PFDA AMM legacy oracle test
+        run: bun run test:pfda-amm-legacy:oracle
+
+      - name: Run PFDA AMM legacy Jito bid test
+        run: bun run test:pfda-amm-legacy:jito-bid

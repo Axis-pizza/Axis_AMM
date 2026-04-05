@@ -18,6 +18,7 @@ SBF_BUILD_MANIFESTS=(
 )
 
 SBF_LOCAL_E2E_MANIFESTS=(
+  "contracts/pfda-amm/Cargo.toml"
   "contracts/pfda-amm-3/Cargo.toml"
   "contracts/axis-g3m/Cargo.toml"
   "contracts/axis-vault/Cargo.toml"

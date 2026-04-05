@@ -17,11 +17,26 @@ function runBunScript(relativePath, extraEnv = {}) {
 }
 
 describe("CI Structure", () => {
-  test("workflow delegates job logic to shell scripts", () => {
-    const workflow = readFile(".github/workflows/ci.yml");
+  test("entry workflow calls reusable workflows to avoid duplicated triggers", () => {
+    const entryWorkflow = readFile(".github/workflows/ci.yml");
 
-    expect(workflow).toContain("bash ci/job-rust-and-typescript.sh");
-    expect(workflow).toContain("bash ci/job-local-e2e.sh");
+    expect(entryWorkflow).toContain(".github/workflows/reusable-rust-and-typescript.yml");
+    expect(entryWorkflow).toContain(".github/workflows/reusable-e2e-local.yml");
+    expect(entryWorkflow).toContain("cancel-in-progress: true");
+  });
+
+  test("reusable workflows delegate logic to scripts and step-based e2e suites", () => {
+    const rustTsWorkflow = readFile(".github/workflows/reusable-rust-and-typescript.yml");
+    const localE2eWorkflow = readFile(".github/workflows/reusable-e2e-local.yml");
+
+    expect(rustTsWorkflow).toContain("bash ci/job-rust-and-typescript.sh");
+
+    expect(localE2eWorkflow).toContain("bash ci/e2e-local-prepare.sh");
+    expect(localE2eWorkflow).toContain("bun run e2e:pfda-amm-legacy:local");
+    expect(localE2eWorkflow).toContain("bun run e2e:pfda-amm-3:local");
+    expect(localE2eWorkflow).toContain("bun run e2e:axis-g3m:local");
+    expect(localE2eWorkflow).toContain("bun run e2e:axis-vault:local");
+    expect(localE2eWorkflow).toContain("bash ci/e2e-local-cleanup.sh");
   });
 
   test("required CI scripts are tracked", () => {
@@ -36,6 +51,12 @@ describe("CI Structure", () => {
       "ci/jest.sh",
       "ci/job-rust-and-typescript.sh",
       "ci/job-local-e2e.sh",
+      "ci/job-devnet-e2e.sh",
+      "ci/e2e-local-prepare.sh",
+      "ci/e2e-local-cleanup.sh",
+      ".github/workflows/reusable-rust-and-typescript.yml",
+      ".github/workflows/reusable-e2e-local.yml",
+      ".github/workflows/e2e-devnet.yml",
     ];
 
     for (const script of requiredScripts) {

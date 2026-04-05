@@ -30,7 +30,8 @@
     "ci:rust:test": "bash ci/rust-tests.sh",
     "ci:rust:build-sbf": "bash ci/rust-build-sbf.sh",
     "ci:rust-and-typescript": "bash ci/job-rust-and-typescript.sh",
-    "ci:local-e2e": "bash ci/job-local-e2e.sh"
+    "ci:local-e2e": "bash ci/job-local-e2e.sh",
+    "ci:devnet-e2e": "bash ci/job-devnet-e2e.sh"
   },
   "dependencies": {
     "@solana/spl-token": "^0.4.9",

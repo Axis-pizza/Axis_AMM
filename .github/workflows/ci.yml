@@ -5,7 +5,10 @@ on:
   push:
     branches:
       - main
-      - axis/**
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -13,57 +16,9 @@ permissions:
 jobs:
   rust-and-typescript:
     name: Rust + TypeScript Checks
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
-
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-
-      - name: Set up Bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: "1.3.6"
-
-      - name: Set up Rust
-        run: bash ci/setup-rust.sh
-
-      - name: Install Solana CLI
-        run: bash ci/install-solana.sh
-
-      - name: Install JavaScript dependencies
-        run: bun install --frozen-lockfile
-
-      - name: Run Rust + TypeScript pipeline
-        run: bash ci/job-rust-and-typescript.sh
+    uses: ./.github/workflows/reusable-rust-and-typescript.yml
 
   local-e2e:
     name: Local Validator E2E
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
-
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-
-      - name: Set up Bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: "1.3.6"
-
-      - name: Set up Rust
-        run: bash ci/setup-rust.sh
-
-      - name: Install Solana CLI
-        run: bash ci/install-solana.sh
-
-      - name: Install JavaScript dependencies
-        run: bun install --frozen-lockfile
-
-      - name: Run local validator e2e suites
-        run: bash ci/job-local-e2e.sh
-
-      - name: Dump validator log on failure
-        if: failure()
-        run: |
-          test -f /tmp/solana-test-validator.log && cat /tmp/solana-test-validator.log
+    needs: rust-and-typescript
+    uses: ./.github/workflows/reusable-e2e-local.yml

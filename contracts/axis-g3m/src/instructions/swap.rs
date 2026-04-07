@@ -158,5 +158,20 @@ pub fn process_swap(
     }
     pool.set_invariant_k(new_k);
 
+    // === Emit swap metrics via return_data for A/B test analysis ===
+    // Layout (26 bytes):
+    //   [0..8]:   amount_in (u64 LE)
+    //   [8..16]:  amount_out (u64 LE)
+    //   [16..24]: new_k_lo (u64 LE) — low 8 bytes of post-swap invariant
+    //   [24]:     in_token_index (u8)
+    //   [25]:     out_token_index (u8)
+    let mut return_buf = [0u8; 26];
+    return_buf[0..8].copy_from_slice(&amount_in.to_le_bytes());
+    return_buf[8..16].copy_from_slice(&amount_out.to_le_bytes());
+    return_buf[16..24].copy_from_slice(&(new_k as u64).to_le_bytes());
+    return_buf[24] = in_idx;
+    return_buf[25] = out_idx;
+    pinocchio::program::set_return_data(&return_buf);
+
     Ok(())
 }

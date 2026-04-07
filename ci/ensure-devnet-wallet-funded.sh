@@ -16,7 +16,7 @@ to_lamports() {
 
 read_balance_lamports() {
   local raw
-  raw="$(solana balance --lamports | awk "{print \$1}")"
+  raw="$(solana -u devnet balance --lamports | awk "{print \$1}")"
   if [[ "${raw}" =~ ^[0-9]+$ ]]; then
     echo "${raw}"
     return 0
@@ -26,7 +26,7 @@ read_balance_lamports() {
 }
 
 min_balance_lamports="$(to_lamports "${MIN_BALANCE_SOL}")"
-wallet_address="$(solana address)"
+wallet_address="$(solana -u devnet address)"
 current_lamports="$(read_balance_lamports)"
 
 if (( current_lamports >= min_balance_lamports )); then

@@ -27,6 +27,14 @@ const MIN_FEED_ACCOUNT_SIZE: usize = 1360;
 /// Switchboard prices are scaled by 10^18
 const SWITCHBOARD_PRECISION: u128 = 1_000_000_000_000_000_000;
 
+/// Switchboard On-Demand program ID: SBondMDrcV3K4kxZR1HNVT7osZxAHVHgYXL5Ze1oMUv
+const SWITCHBOARD_ON_DEMAND_PID: [u8; 32] = [
+    0x06, 0x73, 0xbd, 0x46, 0xf2, 0xe4, 0x7e, 0x04,
+    0xf1, 0x2b, 0xd9, 0x2f, 0xb7, 0x31, 0x96, 0x8e,
+    0xcd, 0x9d, 0x97, 0x57, 0xc2, 0x74, 0xda, 0x87,
+    0x47, 0x6f, 0x46, 0x5c, 0x04, 0x0c, 0x65, 0x73,
+];
+
 /// Read a Switchboard on-demand price feed and return the price as Q32.32 fixed-point.
 ///
 /// Validates:
@@ -42,6 +50,11 @@ pub fn read_switchboard_price(
     max_stale_slots: u64,
     min_samples: u8,
 ) -> Result<u64, ProgramError> {
+    // Verify the feed account is owned by the Switchboard On-Demand program
+    if feed_account.owner() != &SWITCHBOARD_ON_DEMAND_PID {
+        return Err(Pfda3Error::OracleOwnerMismatch.into());
+    }
+
     let data = feed_account.try_borrow_data()?;
 
     if data.len() < MIN_FEED_ACCOUNT_SIZE {

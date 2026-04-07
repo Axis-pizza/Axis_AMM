@@ -28,6 +28,10 @@ pub enum Pfda3Error {
     OracleStale = 8022,
     OracleInsufficientSamples = 8023,
     BidTooLow = 8024,
+    VaultMismatch = 8025,
+    MintMismatch = 8026,
+    BidWithoutTreasury = 8027,
+    OracleOwnerMismatch = 8028,
 }
 
 impl From<Pfda3Error> for ProgramError {

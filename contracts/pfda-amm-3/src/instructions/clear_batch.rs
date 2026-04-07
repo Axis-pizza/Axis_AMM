@@ -84,7 +84,10 @@ pub fn process_clear_batch_3(
         if bid_lamports < crate::jito::MIN_BID_LAMPORTS {
             return Err(Pfda3Error::BidTooLow.into());
         }
-        if accounts.len() > 9 {
+        if accounts.len() <= 9 {
+            return Err(Pfda3Error::BidWithoutTreasury.into());
+        }
+        {
             let treasury_ai = &accounts[9];
             // Validate treasury matches pool's configured treasury
             if treasury_ai.key().as_ref() != &treasury {
@@ -105,6 +108,7 @@ pub fn process_clear_batch_3(
             );
         }
     }
+
 
     // Set reentrancy guard
     {

@@ -173,7 +173,7 @@ async function main() {
       programId: PROGRAM_ID,
       keys: [
         { pubkey: users[u].publicKey, isSigner: true, isWritable: false },
-        { pubkey: pool, isSigner: false, isWritable: false },
+        { pubkey: pool, isSigner: false, isWritable: true },
         { pubkey: history0, isSigner: false, isWritable: false },
         { pubkey: ticket, isSigner: false, isWritable: true },
         ...vaults.map(v => ({ pubkey: v, isSigner: false, isWritable: true })),

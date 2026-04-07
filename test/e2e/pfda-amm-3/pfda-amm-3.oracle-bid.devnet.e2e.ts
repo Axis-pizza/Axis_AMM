@@ -177,7 +177,7 @@ function ixClaim(
     programId: PROGRAM_ID,
     keys: [
       { pubkey: user, isSigner: true, isWritable: false },
-      { pubkey: pool, isSigner: false, isWritable: false },
+      { pubkey: pool, isSigner: false, isWritable: true },
       { pubkey: history, isSigner: false, isWritable: false },
       { pubkey: ticket, isSigner: false, isWritable: true },
       { pubkey: vaults[0], isSigner: false, isWritable: true },
@@ -305,22 +305,32 @@ async function main() {
   const windowEnd = poolData.readBigUInt64LE(256);
   console.log(`  Window ends: slot ${windowEnd}`);
 
-  // 5b. Add liquidity
-  console.log("\nStep 5b: Add liquidity (1B tokens per vault)");
+  // 5b. Add liquidity via AddLiquidity instruction (updates pool.reserves)
+  console.log("\nStep 5b: AddLiquidity (1B tokens per vault)");
   const LIQ = 1_000_000_000n;
-  for (let i = 0; i < 3; i++) {
-    const transferIx = new TransactionInstruction({
-      programId: TOKEN_PROGRAM_ID,
-      keys: [
-        { pubkey: userAccounts[i], isSigner: false, isWritable: true },
-        { pubkey: vaults[i], isSigner: false, isWritable: true },
-        { pubkey: payer.publicKey, isSigner: true, isWritable: false },
-      ],
-      data: Buffer.concat([Buffer.from([3]), u64Le(LIQ)]),
-    });
-    await sendAndConfirmTransaction(conn, new Transaction().add(transferIx), [payer]);
-  }
-  console.log(`  Transferred ${LIQ} to each vault`);
+  const addLiqData = Buffer.concat([
+    Buffer.from([4]),  // AddLiquidity discriminant
+    u64Le(LIQ), u64Le(LIQ), u64Le(LIQ),
+  ]);
+  const addLiqIx = new TransactionInstruction({
+    programId: PROGRAM_ID,
+    keys: [
+      { pubkey: payer.publicKey, isSigner: true, isWritable: true },
+      { pubkey: pool, isSigner: false, isWritable: true },
+      { pubkey: vaults[0], isSigner: false, isWritable: true },
+      { pubkey: vaults[1], isSigner: false, isWritable: true },
+      { pubkey: vaults[2], isSigner: false, isWritable: true },
+      { pubkey: userAccounts[0], isSigner: false, isWritable: true },
+      { pubkey: userAccounts[1], isSigner: false, isWritable: true },
+      { pubkey: userAccounts[2], isSigner: false, isWritable: true },
+      { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+    ],
+    data: addLiqData,
+  });
+  const addLiqSig = await sendAndConfirmTransaction(conn, new Transaction().add(addLiqIx), [payer]);
+  cuLog["AddLiquidity"] = await getCU(conn, addLiqSig);
+  console.log(`  CU: ${cuLog["AddLiquidity"]?.toLocaleString()}`);
+  console.log(`  Deposited ${LIQ} of each token`);
 
   // 6. SwapRequest (token 0 -> token 1)
   console.log("\nStep 6: SwapRequest (10M tokens: token 0 -> token 1)");

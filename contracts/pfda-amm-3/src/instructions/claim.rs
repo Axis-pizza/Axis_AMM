@@ -107,6 +107,11 @@ pub fn process_claim_3(program_id: &Pubkey, accounts: &[AccountInfo]) -> Program
     let in_i = in_idx as usize;
     let out_i = out_idx as usize;
 
+    // Bounds check: both indices must be < 3 (panic handler is UB in no_std)
+    if in_i >= 3 || out_i >= 3 {
+        return Err(Pfda3Error::InvalidTokenIndex.into());
+    }
+
     // Validate user's output token account mint matches the expected token
     let user_accounts = [user_tok0, user_tok1, user_tok2];
     verify_token_account_mint(user_accounts[out_i], &token_mints[out_i])?;
@@ -158,14 +163,37 @@ pub fn process_claim_3(program_id: &Pubkey, accounts: &[AccountInfo]) -> Program
         .invoke_signed(&[Signer::from(&pool_signer)])?;
     }
 
-    // Update pool reserves to reflect the outflow
+    // Update pool reserves to reflect the outflow + invariant floor check
     if amount_out > 0 {
         let mut data = pool_ai.try_borrow_mut_data()?;
         let pool = unsafe { load_mut::<PoolState3>(&mut data) }
             .ok_or(ProgramError::InvalidAccountData)?;
+
+        // Snapshot reserve product before outflow (checked — overflow is an error)
+        let pre_product: u128 = (pool.reserves[0].max(1) as u128)
+            .checked_mul(pool.reserves[1].max(1) as u128)
+            .and_then(|x| x.checked_mul(pool.reserves[2].max(1) as u128))
+            .ok_or(ProgramError::from(Pfda3Error::Overflow))?;
+
         pool.reserves[out_i] = pool.reserves[out_i]
             .checked_sub(amount_out)
             .ok_or(Pfda3Error::Overflow)?;
+
+        // Post-claim invariant floor: reserve product must not drop more
+        // than 1% below pre-claim product. This catches pathological
+        // concentrated withdrawals that could drain a single token.
+        let post_product: u128 = (pool.reserves[0].max(1) as u128)
+            .checked_mul(pool.reserves[1].max(1) as u128)
+            .and_then(|x| x.checked_mul(pool.reserves[2].max(1) as u128))
+            .ok_or(ProgramError::from(Pfda3Error::Overflow))?;
+
+        let min_product = pre_product
+            .checked_mul(99)
+            .ok_or(ProgramError::from(Pfda3Error::Overflow))?
+            / 100;
+        if post_product < min_product {
+            return Err(Pfda3Error::InvariantViolation.into());
+        }
     }
 
     // Mark claimed

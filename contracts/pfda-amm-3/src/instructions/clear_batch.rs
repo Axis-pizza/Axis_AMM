@@ -77,9 +77,7 @@ pub fn process_clear_batch_3(
         )
     };
 
-    // --- Jito bid payment ---
-    // If bid_lamports > 0 and treasury account provided (account 9),
-    // transfer SOL from cranker to treasury.
+    // --- Jito bid payment (before reentrancy guard — safe to fail freely) ---
     if bid_lamports > 0 {
         if bid_lamports < crate::jito::MIN_BID_LAMPORTS {
             return Err(Pfda3Error::BidTooLow.into());
@@ -87,28 +85,22 @@ pub fn process_clear_batch_3(
         if accounts.len() <= 9 {
             return Err(Pfda3Error::BidWithoutTreasury.into());
         }
-        {
-            let treasury_ai = &accounts[9];
-            // Validate treasury matches pool's configured treasury
-            if treasury_ai.key().as_ref() != &treasury {
-                return Err(Pfda3Error::TreasuryMismatch.into());
-            }
-            // Transfer SOL from cranker to treasury
-            pinocchio_system::instructions::Transfer {
-                from: cranker,
-                to: treasury_ai,
-                lamports: bid_lamports,
-            }
-            .invoke()?;
-
-            // Compute revenue split for accounting (logged off-chain)
-            let (_protocol_share, _lp_share) = crate::jito::compute_bid_split(
-                bid_lamports,
-                crate::jito::DEFAULT_ALPHA_BPS,
-            );
+        let treasury_ai = &accounts[9];
+        if treasury_ai.key().as_ref() != &treasury {
+            return Err(Pfda3Error::TreasuryMismatch.into());
         }
-    }
+        pinocchio_system::instructions::Transfer {
+            from: cranker,
+            to: treasury_ai,
+            lamports: bid_lamports,
+        }
+        .invoke()?;
 
+        let (_ps, _ls) = crate::jito::compute_bid_split(
+            bid_lamports,
+            crate::jito::DEFAULT_ALPHA_BPS,
+        );
+    }
 
     // Set reentrancy guard
     {
@@ -118,6 +110,42 @@ pub fn process_clear_batch_3(
         pool.reentrancy_guard = 1;
     }
 
+    // === All operations after this point must release the guard on error ===
+    // Delegate to inner function; always release guard regardless of outcome.
+    let result = clear_batch_inner(
+        program_id, accounts, cranker, pool_ai, queue_ai, history_ai, new_queue_ai,
+        current_slot, batch_id, window_end, reserves, weights, window_slots,
+        base_fee_bps, pool_key, bid_lamports,
+    );
+
+    if result.is_err() {
+        release_guard(pool_ai)?;
+    }
+
+    result
+}
+
+/// Inner clearing logic — all errors propagated with `?` are safe because
+/// the caller guarantees `release_guard` on any `Err`.
+#[inline(never)]
+fn clear_batch_inner(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    cranker: &AccountInfo,
+    pool_ai: &AccountInfo,
+    queue_ai: &AccountInfo,
+    history_ai: &AccountInfo,
+    new_queue_ai: &AccountInfo,
+    current_slot: u64,
+    batch_id: u64,
+    window_end: u64,
+    reserves: [u64; 3],
+    weights: [u32; 3],
+    window_slots: u64,
+    base_fee_bps: u16,
+    pool_key: Pubkey,
+    bid_lamports: u64,
+) -> ProgramResult {
     // Load batch queue
     let batch_id_bytes = batch_id.to_le_bytes();
     let (expected_queue, _) = pubkey::find_program_address(
@@ -125,7 +153,6 @@ pub fn process_clear_batch_3(
         program_id,
     );
     if queue_ai.key() != &expected_queue {
-        release_guard(pool_ai)?;
         return Err(ProgramError::InvalidSeeds);
     }
 
@@ -134,15 +161,12 @@ pub fn process_clear_batch_3(
         let queue = unsafe { load::<BatchQueue3>(&data) }
             .ok_or(ProgramError::InvalidAccountData)?;
         if !queue.is_initialized() {
-            release_guard(pool_ai)?;
             return Err(Pfda3Error::InvalidDiscriminator.into());
         }
         queue.total_in
     };
 
     // --- Read oracle prices (if 3 oracle feeds provided: accounts 6, 7, 8) ---
-    // Oracle prices are Q32.32 fixed-point (price per token in USD).
-    // Max staleness: 100 slots (~40 seconds). Min 1 oracle sample.
     let oracle_prices: Option<[u64; 3]> = if accounts.len() > 8 {
         let mut prices = [0u64; 3];
         let mut all_ok = true;
@@ -162,8 +186,6 @@ pub fn process_clear_batch_3(
     };
 
     // --- Compute clearing prices ---
-    // Base: reserve-ratio derived prices (token i in numeraire = token 0).
-    // With oracle: bound each clearing price to ±5% of oracle-derived price.
     let mut clearing_prices = [0u64; 3];
 
     let r0 = reserves[0].max(1) as u128;
@@ -174,24 +196,20 @@ pub fn process_clear_batch_3(
         let wi = weights[i].max(1) as u128;
 
         let reserve_price = if i == 0 {
-            1u64 << 32 // 1.0 for the numeraire
+            1u64 << 32
         } else {
             ((r0 * wi * (1u128 << 32)) / (ri * w0)) as u64
         };
 
-        // If oracle prices available, bound the clearing price to ±5% of oracle
         let effective_price = if let Some(ref oracle_px) = oracle_prices {
             if i == 0 {
-                reserve_price // numeraire stays 1.0
+                reserve_price
             } else {
-                // Oracle-derived relative price: price_i / price_0
-                // Both are Q32.32, so ratio = (price_i << 32) / price_0
                 let op_i = oracle_px[i] as u128;
                 let op_0 = oracle_px[0].max(1) as u128;
                 let oracle_rel = ((op_i << 32) / op_0) as u64;
 
-                // Clamp reserve_price to within ±5% of oracle_rel
-                let max_dev_bps: u64 = 500; // 5%
+                let max_dev_bps: u64 = 500;
                 let lower = oracle_rel.saturating_sub(oracle_rel * max_dev_bps / 10_000);
                 let upper = oracle_rel.saturating_add(oracle_rel * max_dev_bps / 10_000);
                 reserve_price.max(lower).min(upper)
@@ -202,6 +220,13 @@ pub fn process_clear_batch_3(
 
         clearing_prices[i] = effective_price;
     }
+
+    // === Pre-clearing invariant snapshot ===
+    // Use checked arithmetic — overflow is an error, not a silent pass.
+    let pre_product: u128 = (reserves[0].max(1) as u128)
+        .checked_mul(reserves[1].max(1) as u128)
+        .and_then(|x| x.checked_mul(reserves[2].max(1) as u128))
+        .ok_or(ProgramError::from(Pfda3Error::Overflow))?;
 
     // Update reserves with batch inputs
     let mut total_out = [0u64; 3];
@@ -217,6 +242,63 @@ pub fn process_clear_batch_3(
         }
     }
 
+    // === Reserve adequacy check ===
+    let total_value_in: u128 = {
+        let mut v: u128 = 0;
+        for i in 0..3 {
+            v = v.checked_add(
+                (total_in[i] as u128)
+                    .checked_mul(clearing_prices[i] as u128)
+                    .ok_or(Pfda3Error::Overflow)?
+                    >> 32
+            ).ok_or(Pfda3Error::Overflow)?;
+        }
+        v
+    };
+
+    if total_value_in > 0 {
+        let fee_factor = 10_000u128.checked_sub(base_fee_bps as u128)
+            .ok_or(Pfda3Error::Overflow)?;
+        let max_claim_value = total_value_in
+            .checked_mul(fee_factor)
+            .ok_or(Pfda3Error::Overflow)?
+            / 10_000;
+
+        for j in 0..3 {
+            let price_j = clearing_prices[j] as u128;
+            if price_j == 0 {
+                continue;
+            }
+            let max_outflow_j = (max_claim_value << 32)
+                .checked_div(price_j)
+                .ok_or(Pfda3Error::Overflow)?;
+            if (new_reserves[j] as u128) < max_outflow_j {
+                return Err(Pfda3Error::ReserveInsufficient.into());
+            }
+        }
+    }
+
+    // === Bid-to-volume validation ===
+    if bid_lamports > 0 && total_value_in > 0 {
+        // Safe truncation: cap at u64::MAX for ratio check
+        let volume_u64 = if total_value_in > u64::MAX as u128 {
+            u64::MAX
+        } else {
+            total_value_in as u64
+        };
+        crate::jito::validate_bid_against_volume(bid_lamports, volume_u64)?;
+    }
+
+    // === Post-clearing 3D invariant check ===
+    let post_product: u128 = (new_reserves[0].max(1) as u128)
+        .checked_mul(new_reserves[1].max(1) as u128)
+        .and_then(|x| x.checked_mul(new_reserves[2].max(1) as u128))
+        .ok_or(ProgramError::from(Pfda3Error::Overflow))?;
+
+    if post_product < pre_product {
+        return Err(Pfda3Error::InvariantViolation.into());
+    }
+
     let rent = Rent::get()?;
 
     // Create history PDA
@@ -225,7 +307,6 @@ pub fn process_clear_batch_3(
         program_id,
     );
     if history_ai.key() != &expected_history {
-        release_guard(pool_ai)?;
         return Err(ProgramError::InvalidSeeds);
     }
 
@@ -265,14 +346,14 @@ pub fn process_clear_batch_3(
     // Create next batch queue
     let next_batch_id = batch_id.checked_add(1).ok_or(Pfda3Error::Overflow)?;
     let next_id_bytes = next_batch_id.to_le_bytes();
-    let next_window_end = window_end + window_slots;
+    let next_window_end = window_end.checked_add(window_slots)
+        .ok_or(Pfda3Error::Overflow)?;
 
     let (expected_new_queue, new_queue_bump) = pubkey::find_program_address(
         &[b"queue3", &pool_key, &next_id_bytes],
         program_id,
     );
     if new_queue_ai.key() != &expected_new_queue {
-        release_guard(pool_ai)?;
         return Err(ProgramError::InvalidSeeds);
     }
 
@@ -316,6 +397,27 @@ pub fn process_clear_batch_3(
         pool.current_window_end = next_window_end;
         pool.reentrancy_guard = 0;
     }
+
+    // === Emit clearing metrics via return_data for A/B test analysis ===
+    // Layout (57 bytes):
+    //   [0..8]:   clearing_price_0 (u64 LE, Q32.32)
+    //   [8..16]:  clearing_price_1
+    //   [16..24]: clearing_price_2
+    //   [24..32]: total_value_in_lo (u64 LE, low 8 bytes of numeraire units)
+    //   [32..40]: bid_lamports (u64 LE)
+    //   [40..48]: batch_id (u64 LE)
+    //   [48..56]: slot (u64 LE)
+    //   [56]:     oracle_used (u8, 0 or 1)
+    let mut return_buf = [0u8; 57];
+    return_buf[0..8].copy_from_slice(&clearing_prices[0].to_le_bytes());
+    return_buf[8..16].copy_from_slice(&clearing_prices[1].to_le_bytes());
+    return_buf[16..24].copy_from_slice(&clearing_prices[2].to_le_bytes());
+    return_buf[24..32].copy_from_slice(&(total_value_in as u64).to_le_bytes());
+    return_buf[32..40].copy_from_slice(&bid_lamports.to_le_bytes());
+    return_buf[40..48].copy_from_slice(&batch_id.to_le_bytes());
+    return_buf[48..56].copy_from_slice(&current_slot.to_le_bytes());
+    return_buf[56] = if oracle_prices.is_some() { 1 } else { 0 };
+    pinocchio::program::set_return_data(&return_buf);
 
     Ok(())
 }

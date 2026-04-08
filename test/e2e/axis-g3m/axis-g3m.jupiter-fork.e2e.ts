@@ -78,7 +78,7 @@ async function main() {
 
   // InitializePool
   console.log("▶ Step 4: InitializePool (2 tokens, 50/50)");
-  const reserves = [1_000_000_000n, 100_000_000n];
+  const reserves = [1_000_000_000n, 1_000_000_000n];
   const initData = Buffer.concat([
     Buffer.from([0]),       // disc
     Buffer.from([2]),       // token_count
@@ -110,7 +110,7 @@ async function main() {
   console.log("▶ Step 5: Swap to create drift");
   const swapData = Buffer.concat([
     Buffer.from([1, 0, 1]), // disc, in_idx, out_idx
-    u64Le(200_000_000n),    // amount_in (20% of reserves — stays within 50% cap)
+    u64Le(100_000_000n),    // amount_in (10% of reserves — stays within 50% attestation cap)
     u64Le(1n),              // min_out
   ]);
   const swapIx = new TransactionInstruction({

@@ -7,11 +7,13 @@ on:
     branches: [main]
     paths:
       - 'contracts/axis-g3m/**'
+      - 'contracts/pfda-amm-3/**'
+      - 'contracts/ab-integration-tests/**'
 
 jobs:
   litesvm-tests:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
 
     steps:
       - uses: actions/checkout@v4
@@ -28,17 +30,19 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             contracts/axis-g3m/target
-          key: litesvm-${{ hashFiles('contracts/axis-g3m/Cargo.lock') }}
+            contracts/pfda-amm-3/target
+            contracts/ab-integration-tests/target
+          key: litesvm-${{ hashFiles('contracts/ab-integration-tests/Cargo.lock', 'contracts/axis-g3m/Cargo.lock') }}
 
       - name: Install Solana CLI
         run: |
           sh -c "$(curl -sSfL https://release.anza.xyz/stable/install)"
           echo "$HOME/.local/share/solana/install/active_release/bin" >> $GITHUB_PATH
 
-      - name: Build axis-g3m SBF
+      - name: Build SBF programs
         run: |
-          cd contracts/axis-g3m
-          cargo build-sbf
+          cd contracts/axis-g3m && cargo build-sbf
+          cd ../pfda-amm-3 && cargo build-sbf
 
       - name: Dump Jupiter V6 from mainnet
         run: |
@@ -48,16 +52,24 @@ jobs:
             JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4 \
             contracts/axis-g3m/fixtures/jupiter_v6.so
 
-      - name: Run LiteSVM unit tests (no network)
+      # ── axis-g3m per-program tests ──
+      - name: Run axis-g3m LiteSVM tests
         run: |
           cd contracts/axis-g3m
           cargo test --test jupiter_cpi -- --nocapture --skip mainnet_fork
 
-      - name: Run LiteSVM mainnet fork test
+      # ── A/B comparison tests (no network) ──
+      - name: Run A/B comparison tests (local)
+        run: |
+          cd contracts/ab-integration-tests
+          cargo test --test ab_comparison -- --nocapture --skip jupiter
+
+      # ── Mainnet fork tests (Jupiter CPI + A/B) ──
+      - name: Run mainnet fork tests
         env:
           MAINNET_RPC_URL: https://api.mainnet-beta.solana.com
         run: |
           cd contracts/axis-g3m
-          cargo test --test jupiter_cpi \
-            test_jupiter_rebalance_mainnet_fork \
-            -- --nocapture --ignored
+          cargo test --test jupiter_cpi test_jupiter_rebalance_mainnet_fork -- --nocapture --ignored
+          cd ../ab-integration-tests
+          cargo test --test ab_comparison test_ab_full_with_jupiter_rebalance -- --nocapture --ignored

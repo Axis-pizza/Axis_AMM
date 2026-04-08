@@ -10,6 +10,7 @@
     "bench:ab": "bun test/benchmark/ab-cu-benchmark.ts",
     "e2e:axis-g3m:local": "bun test/e2e/axis-g3m/axis-g3m.local.e2e.ts",
     "e2e:axis-g3m:devnet": "bun test/e2e/axis-g3m/axis-g3m.devnet.e2e.ts",
+    "e2e:axis-g3m:fork": "RPC_URL=http://localhost:8899 bun test/e2e/axis-g3m/axis-g3m.jupiter-fork.e2e.ts",
     "e2e:axis-vault:local": "RPC_URL=http://localhost:8899 bun test/e2e/axis-vault/axis-vault.local.e2e.ts",
     "e2e:pfda-amm-3:local": "RPC_URL=http://localhost:8899 WINDOW_SLOTS=10 bun test/e2e/pfda-amm-3/pfda-amm-3.local.e2e.ts",
     "e2e:pfda-amm-3:oracle-bid:devnet": "bun test/e2e/pfda-amm-3/pfda-amm-3.oracle-bid.devnet.e2e.ts",

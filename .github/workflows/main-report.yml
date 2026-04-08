@@ -95,13 +95,9 @@ jobs:
             sleep 1
           done
 
-      - name: Run mainnet-fork validation
-        env:
-          MAINNET_RPC_URL: https://api.mainnet-beta.solana.com
-          AB_FORK_REPEATS: "5"
+      - name: Run mainnet-fork E2E (solana-test-validator)
         run: |
-          cd contracts/ab-integration-tests
-          cargo test --test ab_comparison test_ab_pr_validation_mainnet_fork -- --nocapture --ignored
+          RPC_URL=http://localhost:8899 bun test/e2e/axis-g3m/axis-g3m.jupiter-fork.e2e.ts
 
       - name: Stop forked validator
         if: always()

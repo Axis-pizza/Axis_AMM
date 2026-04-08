@@ -109,15 +109,9 @@ jobs:
           done
           echo "Validator ready"
 
-      - name: Run mainnet-fork LiteSVM PR validation
-        env:
-          MAINNET_RPC_URL: https://api.mainnet-beta.solana.com
-          AB_FORK_REPEATS: "3"
+      - name: Run mainnet-fork E2E (solana-test-validator)
         run: |
-          cd contracts/axis-g3m
-          cargo test --test jupiter_cpi test_jupiter_rebalance_mainnet_fork -- --nocapture --ignored
-          cd ../ab-integration-tests
-          cargo test --test ab_comparison test_ab_pr_validation_mainnet_fork -- --nocapture --ignored
+          RPC_URL=http://localhost:8899 bun test/e2e/axis-g3m/axis-g3m.jupiter-fork.e2e.ts
 
       - name: Stop forked validator
         if: always()

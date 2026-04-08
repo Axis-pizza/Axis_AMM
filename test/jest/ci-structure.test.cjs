@@ -49,7 +49,8 @@ describe("CI Structure", () => {
     expect(localE2eWorkflow).toContain("bun run bench:ab");
     expect(localE2eWorkflow).toContain("bash ci/e2e-local-cleanup.sh");
     expect(devnetWorkflow).toContain("bash ci/ensure-devnet-wallet-funded.sh 2");
-    expect(mainReportWorkflow).toContain("bash ci/ensure-devnet-wallet-funded.sh 2");
+    // main-report now uses LiteSVM instead of devnet
+    expect(mainReportWorkflow).toContain("cargo test --test ab_comparison");
   });
 
   test("required CI scripts are tracked", () => {

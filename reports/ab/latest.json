@@ -1,5 +1,5 @@
 {
-  "generated_at": "1775576568s-since-epoch",
+  "generated_at": "1775625417s-since-epoch",
   "environment": "LiteSVM (local, multi-scenario)",
   "scenarios": [
     {
@@ -11,8 +11,9 @@
         1000000
       ],
       "g3m": {
-        "init_cu": 17583,
+        "init_cu": 13083,
         "swap_cu": 11939,
+        "drift_swap_cu": 0,
         "check_drift_cu": 1259,
         "rebalance_cu": 9494,
         "pre_k": 0,
@@ -22,13 +23,32 @@
           1210000,
           827927
         ],
-        "total_slots": 1
+        "total_slots": 1,
+        "tokens_received": 0,
+        "effective_price": 0.0,
+        "slippage_bps": 0.0,
+        "price_improvement_bps": 0.0,
+        "post_trade_drift_bps": 0.0,
+        "invariant_delta_bps": 0.0,
+        "rebalance_frequency": 0,
+        "rebalance_effectiveness_bps": 0.0,
+        "fee_revenue": 0,
+        "treasury_delta": 0,
+        "net_cost_lamports": 0.0,
+        "success": false,
+        "retries": 0,
+        "timeouts": 0,
+        "critical_invariant_violation": false,
+        "slot_to_finality": 0,
+        "cold_start_cu": 0,
+        "steady_state_cu": 0,
+        "total_cu": 0
       },
       "pfda3": {
         "init_cu": 0,
         "add_liq_cu": 0,
-        "swap_request_cu": 7736,
-        "clear_batch_cu": 10536,
+        "swap_request_cu": 10736,
+        "clear_batch_cu": 31536,
         "claim_cu": 3223,
         "clearing_prices": [
           0,
@@ -38,7 +58,25 @@
         "total_value_in": 0,
         "tokens_received": 9970,
         "batch_window_slots": 10,
-        "total_slots": 11
+        "total_slots": 11,
+        "effective_price": 0.0,
+        "slippage_bps": 0.0,
+        "price_improvement_bps": 0.0,
+        "post_trade_drift_bps": 0.0,
+        "invariant_delta_bps": 0.0,
+        "rebalance_frequency": 0,
+        "rebalance_effectiveness_bps": 0.0,
+        "fee_revenue": 0,
+        "treasury_delta": 0,
+        "net_cost_lamports": 0.0,
+        "success": false,
+        "retries": 0,
+        "timeouts": 0,
+        "critical_invariant_violation": false,
+        "slot_to_finality": 0,
+        "cold_start_cu": 0,
+        "steady_state_cu": 0,
+        "total_cu": 0
       }
     },
     {
@@ -52,6 +90,7 @@
       "g3m": {
         "init_cu": 11615,
         "swap_cu": 11901,
+        "drift_swap_cu": 0,
         "check_drift_cu": 1259,
         "rebalance_cu": 9491,
         "pre_k": 0,
@@ -61,13 +100,32 @@
           121000000,
           82792722
         ],
-        "total_slots": 1
+        "total_slots": 1,
+        "tokens_received": 0,
+        "effective_price": 0.0,
+        "slippage_bps": 0.0,
+        "price_improvement_bps": 0.0,
+        "post_trade_drift_bps": 0.0,
+        "invariant_delta_bps": 0.0,
+        "rebalance_frequency": 0,
+        "rebalance_effectiveness_bps": 0.0,
+        "fee_revenue": 0,
+        "treasury_delta": 0,
+        "net_cost_lamports": 0.0,
+        "success": false,
+        "retries": 0,
+        "timeouts": 0,
+        "critical_invariant_violation": false,
+        "slot_to_finality": 0,
+        "cold_start_cu": 0,
+        "steady_state_cu": 0,
+        "total_cu": 0
       },
       "pfda3": {
         "init_cu": 0,
         "add_liq_cu": 0,
-        "swap_request_cu": 13736,
-        "clear_batch_cu": 21036,
+        "swap_request_cu": 10736,
+        "clear_batch_cu": 13536,
         "claim_cu": 3224,
         "clearing_prices": [
           0,
@@ -77,7 +135,25 @@
         "total_value_in": 0,
         "tokens_received": 997000,
         "batch_window_slots": 10,
-        "total_slots": 11
+        "total_slots": 11,
+        "effective_price": 0.0,
+        "slippage_bps": 0.0,
+        "price_improvement_bps": 0.0,
+        "post_trade_drift_bps": 0.0,
+        "invariant_delta_bps": 0.0,
+        "rebalance_frequency": 0,
+        "rebalance_effectiveness_bps": 0.0,
+        "fee_revenue": 0,
+        "treasury_delta": 0,
+        "net_cost_lamports": 0.0,
+        "success": false,
+        "retries": 0,
+        "timeouts": 0,
+        "critical_invariant_violation": false,
+        "slot_to_finality": 0,
+        "cold_start_cu": 0,
+        "steady_state_cu": 0,
+        "total_cu": 0
       }
     },
     {
@@ -91,6 +167,7 @@
       "g3m": {
         "init_cu": 11607,
         "swap_cu": 11911,
+        "drift_swap_cu": 0,
         "check_drift_cu": 1259,
         "rebalance_cu": 9505,
         "pre_k": 0,
@@ -100,13 +177,32 @@
           1205000000,
           831327915
         ],
-        "total_slots": 1
+        "total_slots": 1,
+        "tokens_received": 0,
+        "effective_price": 0.0,
+        "slippage_bps": 0.0,
+        "price_improvement_bps": 0.0,
+        "post_trade_drift_bps": 0.0,
+        "invariant_delta_bps": 0.0,
+        "rebalance_frequency": 0,
+        "rebalance_effectiveness_bps": 0.0,
+        "fee_revenue": 0,
+        "treasury_delta": 0,
+        "net_cost_lamports": 0.0,
+        "success": false,
+        "retries": 0,
+        "timeouts": 0,
+        "critical_invariant_violation": false,
+        "slot_to_finality": 0,
+        "cold_start_cu": 0,
+        "steady_state_cu": 0,
+        "total_cu": 0
       },
       "pfda3": {
         "init_cu": 0,
         "add_liq_cu": 0,
         "swap_request_cu": 9236,
-        "clear_batch_cu": 15035,
+        "clear_batch_cu": 12035,
         "claim_cu": 3224,
         "clearing_prices": [
           0,
@@ -116,7 +212,25 @@
         "total_value_in": 0,
         "tokens_received": 4985000,
         "batch_window_slots": 10,
-        "total_slots": 11
+        "total_slots": 11,
+        "effective_price": 0.0,
+        "slippage_bps": 0.0,
+        "price_improvement_bps": 0.0,
+        "post_trade_drift_bps": 0.0,
+        "invariant_delta_bps": 0.0,
+        "rebalance_frequency": 0,
+        "rebalance_effectiveness_bps": 0.0,
+        "fee_revenue": 0,
+        "treasury_delta": 0,
+        "net_cost_lamports": 0.0,
+        "success": false,
+        "retries": 0,
+        "timeouts": 0,
+        "critical_invariant_violation": false,
+        "slot_to_finality": 0,
+        "cold_start_cu": 0,
+        "steady_state_cu": 0,
+        "total_cu": 0
       }
     },
     {
@@ -130,6 +244,7 @@
       "g3m": {
         "init_cu": 11607,
         "swap_cu": 11934,
+        "drift_swap_cu": 0,
         "check_drift_cu": 1259,
         "rebalance_cu": 9500,
         "pre_k": 0,
@@ -139,13 +254,32 @@
           1210000000,
           827927231
         ],
-        "total_slots": 1
+        "total_slots": 1,
+        "tokens_received": 0,
+        "effective_price": 0.0,
+        "slippage_bps": 0.0,
+        "price_improvement_bps": 0.0,
+        "post_trade_drift_bps": 0.0,
+        "invariant_delta_bps": 0.0,
+        "rebalance_frequency": 0,
+        "rebalance_effectiveness_bps": 0.0,
+        "fee_revenue": 0,
+        "treasury_delta": 0,
+        "net_cost_lamports": 0.0,
+        "success": false,
+        "retries": 0,
+        "timeouts": 0,
+        "critical_invariant_violation": false,
+        "slot_to_finality": 0,
+        "cold_start_cu": 0,
+        "steady_state_cu": 0,
+        "total_cu": 0
       },
       "pfda3": {
         "init_cu": 0,
         "add_liq_cu": 0,
         "swap_request_cu": 9236,
-        "clear_batch_cu": 15037,
+        "clear_batch_cu": 10537,
         "claim_cu": 3224,
         "clearing_prices": [
           0,
@@ -155,7 +289,25 @@
         "total_value_in": 0,
         "tokens_received": 9970000,
         "batch_window_slots": 10,
-        "total_slots": 11
+        "total_slots": 11,
+        "effective_price": 0.0,
+        "slippage_bps": 0.0,
+        "price_improvement_bps": 0.0,
+        "post_trade_drift_bps": 0.0,
+        "invariant_delta_bps": 0.0,
+        "rebalance_frequency": 0,
+        "rebalance_effectiveness_bps": 0.0,
+        "fee_revenue": 0,
+        "treasury_delta": 0,
+        "net_cost_lamports": 0.0,
+        "success": false,
+        "retries": 0,
+        "timeouts": 0,
+        "critical_invariant_violation": false,
+        "slot_to_finality": 0,
+        "cold_start_cu": 0,
+        "steady_state_cu": 0,
+        "total_cu": 0
       }
     }
   ]

@@ -78,11 +78,19 @@ jobs:
           path: reports/ab/latest.*
 
       # ── Mainnet fork tests (Jupiter CPI + A/B) ──
-      - name: Run mainnet fork tests
+      - name: Run mainnet fork PR validation
         env:
           MAINNET_RPC_URL: https://api.mainnet-beta.solana.com
+          AB_FORK_REPEATS: "3"
         run: |
           cd contracts/axis-g3m
           cargo test --test jupiter_cpi test_jupiter_rebalance_mainnet_fork -- --nocapture --ignored
           cd ../ab-integration-tests
-          cargo test --test ab_comparison test_ab_full_with_jupiter_rebalance -- --nocapture --ignored
+          cargo test --test ab_comparison test_ab_pr_validation_mainnet_fork -- --nocapture --ignored
+
+      - name: Upload mainnet-fork report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mainnet-fork-report
+          path: reports/ab/mainnet-fork/

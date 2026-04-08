@@ -1,13 +1,19 @@
 use litesvm::LiteSVM;
+use serde::Deserialize;
 use solana_address::Address;
 use solana_rpc_client::rpc_client::RpcClient;
-use serde::Deserialize;
 
 /// Clone an account from mainnet RPC into LiteSVM.
 pub fn clone_from_rpc(svm: &mut LiteSVM, rpc: &RpcClient, addr: &Address) -> bool {
     match rpc.get_account(addr) {
-        Ok(account) => { svm.set_account(*addr, account).unwrap(); true }
-        Err(e) => { eprintln!("  warn: clone failed {}: {}", addr, e); false }
+        Ok(account) => {
+            svm.set_account(*addr, account).unwrap();
+            true
+        }
+        Err(e) => {
+            eprintln!("  warn: clone failed {}: {}", addr, e);
+            false
+        }
     }
 }
 
@@ -15,7 +21,9 @@ pub fn clone_from_rpc(svm: &mut LiteSVM, rpc: &RpcClient, addr: &Address) -> boo
 pub fn clone_accounts_batch(svm: &mut LiteSVM, rpc: &RpcClient, addrs: &[Address]) -> usize {
     let mut cloned = 0;
     for addr in addrs {
-        if clone_from_rpc(svm, rpc, addr) { cloned += 1; }
+        if clone_from_rpc(svm, rpc, addr) {
+            cloned += 1;
+        }
     }
     cloned
 }
@@ -57,7 +65,7 @@ struct SwapInstructionsResponse {
 #[derive(Deserialize)]
 struct SwapInstruction {
     #[serde(rename = "programId")]
-    program_id: String,
+    _program_id: String,
     accounts: Vec<SwapAccount>,
     data: String,
 }
@@ -103,8 +111,13 @@ pub fn fetch_jupiter_route(
         .read_to_string()
         .map_err(|e| format!("quote read failed: {}", e))?;
 
-    let quote: QuoteResponse = serde_json::from_str(&quote_body)
-        .map_err(|e| format!("quote parse failed: {} body: {}", e, &quote_body[..200.min(quote_body.len())]))?;
+    let quote: QuoteResponse = serde_json::from_str(&quote_body).map_err(|e| {
+        format!(
+            "quote parse failed: {} body: {}",
+            e,
+            &quote_body[..200.min(quote_body.len())]
+        )
+    })?;
 
     // Step 2: Swap instructions
     let swap_body = serde_json::json!({
@@ -122,8 +135,13 @@ pub fn fetch_jupiter_route(
         .read_to_string()
         .map_err(|e| format!("swap-instructions read failed: {}", e))?;
 
-    let si: SwapInstructionsResponse = serde_json::from_str(&swap_resp)
-        .map_err(|e| format!("swap-instructions parse failed: {} body: {}", e, &swap_resp[..300.min(swap_resp.len())]))?;
+    let si: SwapInstructionsResponse = serde_json::from_str(&swap_resp).map_err(|e| {
+        format!(
+            "swap-instructions parse failed: {} body: {}",
+            e,
+            &swap_resp[..300.min(swap_resp.len())]
+        )
+    })?;
 
     // Decode instruction data
     use base64::Engine;
@@ -131,15 +149,20 @@ pub fn fetch_jupiter_route(
         .decode(&si.swap_instruction.data)
         .map_err(|e| format!("base64 decode failed: {}", e))?;
 
-    let accounts: Vec<JupiterAccount> = si.swap_instruction.accounts.iter().map(|a| {
-        JupiterAccount {
+    let accounts: Vec<JupiterAccount> = si
+        .swap_instruction
+        .accounts
+        .iter()
+        .map(|a| JupiterAccount {
             pubkey: parse_address(&a.pubkey),
             is_signer: a.is_signer,
             is_writable: a.is_writable,
-        }
-    }).collect();
+        })
+        .collect();
 
-    let alts: Vec<Address> = si.address_lookup_table_addresses.iter()
+    let alts: Vec<Address> = si
+        .address_lookup_table_addresses
+        .iter()
         .map(|s| parse_address(s))
         .collect();
 

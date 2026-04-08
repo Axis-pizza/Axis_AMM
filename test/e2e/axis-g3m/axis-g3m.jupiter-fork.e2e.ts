@@ -110,7 +110,7 @@ async function main() {
   console.log("▶ Step 5: Swap to create drift");
   const swapData = Buffer.concat([
     Buffer.from([1, 0, 1]), // disc, in_idx, out_idx
-    u64Le(500_000_000n),    // amount_in
+    u64Le(200_000_000n),    // amount_in (20% of reserves — stays within 50% cap)
     u64Le(1n),              // min_out
   ]);
   const swapIx = new TransactionInstruction({

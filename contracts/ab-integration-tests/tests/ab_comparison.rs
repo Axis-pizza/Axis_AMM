@@ -628,6 +628,7 @@ fn test_ab_comparison_local() {
     .expect("G3M init");
     println!("  Init: {} CU", g_init);
 
+    let g_before_out_local = read_token_amount(&svm, &g3m_user[1]);
     let g_swap = send(
         &mut svm,
         g3m_swap_ix(
@@ -646,7 +647,8 @@ fn test_ab_comparison_local() {
         &payer,
     )
     .expect("G3M swap");
-    println!("  Swap: {} CU", g_swap);
+    let g_tokens_local = read_token_amount(&svm, &g3m_user[1]).saturating_sub(g_before_out_local);
+    println!("  Swap: {} CU (received: {})", g_swap, g_tokens_local);
 
     let g_drift = send(&mut svm, g3m_check_drift_ix(g3m_pid, g3m_pool), &payer).expect("G3M drift");
     println!("  CheckDrift: {} CU", g_drift);
@@ -852,7 +854,10 @@ fn test_ab_comparison_local() {
             swap_cu: g_swap,
             check_drift_cu: g_drift,
             rebalance_cu: g_reb,
+            tokens_received: g_tokens_local,
+            success: g_tokens_local > 0,
             total_slots: 1,
+            total_cu: g_init + g_swap + g_drift + g_reb,
             ..Default::default()
         },
         pfda3: Pfda3Metrics {
@@ -930,6 +935,7 @@ fn run_scenario(reserve: u64, swap_amount: u64, drift_swap: u64) -> (G3mMetrics,
     )
     .expect("G3M init");
 
+    let g_before_out = read_token_amount(&svm, &gu[1]);
     let g_swap = send(
         &mut svm,
         g3m_swap_ix(
@@ -948,6 +954,7 @@ fn run_scenario(reserve: u64, swap_amount: u64, drift_swap: u64) -> (G3mMetrics,
         &payer,
     )
     .expect("G3M swap");
+    let g_tokens_out = read_token_amount(&svm, &gu[1]).saturating_sub(g_before_out);
 
     let g_drift = send(&mut svm, g3m_check_drift_ix(g3m_pid, g3m_pool), &payer).expect("G3M drift");
 
@@ -986,11 +993,16 @@ fn run_scenario(reserve: u64, swap_amount: u64, drift_swap: u64) -> (G3mMetrics,
         swap_cu: g_swap,
         check_drift_cu: g_drift,
         rebalance_cu: g_reb,
+        tokens_received: g_tokens_out,
+        success: g_tokens_out > 0,
         post_reserves: vec![
             read_token_amount(&svm, &gv[0]),
             read_token_amount(&svm, &gv[1]),
         ],
         total_slots: 1,
+        total_cu: g_init + g_swap + g_drift + g_reb,
+        cold_start_cu: g_init,
+        steady_state_cu: g_swap + g_drift + g_reb,
         ..Default::default()
     };
 

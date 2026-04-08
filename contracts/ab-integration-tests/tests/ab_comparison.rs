@@ -2655,6 +2655,7 @@ fn test_ab_pr_validation_mainnet_fork() {
         notes: vec![
             "Real Jupiter V6 CPI routing with mainnet-forked DEX state.".to_string(),
             format!("{} repeats per scenario, wSOL/USDC pair.", repeats),
+            "Known limitation: LiteSVM does not support BPF account realloc in CPI (InvalidRealloc). Jupiter SharedAccountsRoute requires realloc. When LiteSVM adds realloc support, these tests will pass with the same code.".to_string(),
         ],
         scenarios: scenario_summaries,
         gate: None, // gate evaluation deferred — too few repeats for significance

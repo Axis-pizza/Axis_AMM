@@ -1,20 +1,17 @@
 [package]
-name = "axis-g3m"
+name = "ab-integration-tests"
 version = "0.1.0"
 edition = "2021"
+publish = false
 
 [lib]
-crate-type = ["cdylib", "lib"]
+path = "src/lib.rs"
+
+[[test]]
+name = "ab_comparison"
+path = "tests/ab_comparison.rs"
 
 [dependencies]
-pinocchio = "0.9"
-pinocchio-system = "0.4"
-pinocchio-token = "0.4"
-
-[features]
-no-entrypoint = []
-
-[dev-dependencies]
 litesvm = "0.11"
 solana-keypair = "3.1"
 solana-signer = "3"
@@ -26,5 +23,10 @@ solana-address = "2"
 solana-account = "3"
 solana-native-token = "3"
 solana-rpc-client = "3"
-# Pin to avoid five8/DecodeError incompatibility with solana-signature 3.4.0
+solana-clock = "3"
 solana-signature = ">=3.3, <3.4"
+ureq = "3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+base64 = "0.22"
+bs58 = "0.5"

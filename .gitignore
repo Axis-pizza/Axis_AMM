@@ -57,3 +57,5 @@ __pycache__/
 *.swp
 *.swo
 Thumbs.db
+contracts/axis-g3m/fixtures/jupiter_v6.so
+reports/ab/pr-validation/history/

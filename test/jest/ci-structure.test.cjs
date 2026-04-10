@@ -49,7 +49,9 @@ describe("CI Structure", () => {
     expect(localE2eWorkflow).toContain("bun run bench:ab");
     expect(localE2eWorkflow).toContain("bash ci/e2e-local-cleanup.sh");
     expect(devnetWorkflow).toContain("bash ci/ensure-devnet-wallet-funded.sh 2");
-    expect(mainReportWorkflow).toContain("bash ci/ensure-devnet-wallet-funded.sh 2");
+    // main-report uses LiteSVM + solana-test-validator --clone for Jupiter CPI
+    expect(mainReportWorkflow).toContain("cargo test --test ab_comparison");
+    expect(mainReportWorkflow).toContain("solana-test-validator");
   });
 
   test("required CI scripts are tracked", () => {

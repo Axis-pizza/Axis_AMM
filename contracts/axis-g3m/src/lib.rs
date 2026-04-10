@@ -36,6 +36,7 @@ enum Instruction {
     Swap = 1,
     CheckDrift = 2,
     Rebalance = 3,
+    RebalanceViaJupiter = 4,
 }
 
 impl Instruction {
@@ -45,6 +46,7 @@ impl Instruction {
             1 => Some(Instruction::Swap),
             2 => Some(Instruction::CheckDrift),
             3 => Some(Instruction::Rebalance),
+            4 => Some(Instruction::RebalanceViaJupiter),
             _ => None,
         }
     }
@@ -169,6 +171,21 @@ pub fn process_instruction(
             instructions::process_rebalance(
                 program_id, accounts, &new_reserves[..num_reserves.min(5)],
             )
+        }
+
+        Instruction::RebalanceViaJupiter => {
+            // Layout: [0..4]: jupiter_data_len (u32 LE)
+            //         [4..4+len]: Jupiter swap instruction data (opaque)
+            if data.len() < 4 {
+                return Err(ProgramError::InvalidInstructionData);
+            }
+            let jup_len = u32::from_le_bytes([data[0], data[1], data[2], data[3]]) as usize;
+            if data.len() < 4 + jup_len {
+                return Err(ProgramError::InvalidInstructionData);
+            }
+            let jupiter_data = &data[4..4 + jup_len];
+
+            jupiter::process_rebalance_via_jupiter(program_id, accounts, jupiter_data)
         }
     }
 }

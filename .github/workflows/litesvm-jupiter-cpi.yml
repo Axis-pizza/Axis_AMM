@@ -1,21 +1,26 @@
-name: Main AB Report
+name: A/B Test Suite
 
 on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'contracts/**'
+      - '.github/workflows/litesvm-jupiter-cpi.yml'
   push:
     branches: [main]
     paths:
       - 'contracts/**'
-      - '.github/workflows/main-report.yml'
+      - '.github/workflows/litesvm-jupiter-cpi.yml'
 
 concurrency:
-  group: main-ab-report-${{ github.ref }}
+  group: ab-test-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  update-ab-report:
+  ab-tests:
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -41,7 +46,7 @@ jobs:
             contracts/axis-g3m/target
             contracts/pfda-amm-3/target
             contracts/ab-integration-tests/target
-          key: ab-report-${{ hashFiles('contracts/ab-integration-tests/Cargo.lock') }}
+          key: ab-${{ hashFiles('contracts/ab-integration-tests/Cargo.lock', 'contracts/axis-g3m/Cargo.lock') }}
 
       - name: Install Solana CLI
         run: |
@@ -51,9 +56,11 @@ jobs:
       - name: Install JS dependencies
         run: bun install --frozen-lockfile
 
+      # ── TypeScript checks ──
       - name: TypeScript type check
         run: bun run typecheck 2>&1 || true
 
+      # ── Build SBF programs ──
       - name: Build SBF programs
         run: |
           cd contracts/axis-g3m && cargo build-sbf
@@ -67,15 +74,21 @@ jobs:
             JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4 \
             contracts/axis-g3m/fixtures/jupiter_v6.so
 
-      - name: Generate A/B report via LiteSVM
+      # ── LiteSVM unit tests ──
+      - name: Run axis-g3m LiteSVM tests
+        run: |
+          cd contracts/axis-g3m
+          cargo test --test jupiter_cpi -- --nocapture --skip mainnet_fork
+
+      - name: Run A/B comparison tests (LiteSVM)
+        run: |
+          cd contracts/ab-integration-tests
+          cargo test --test ab_comparison -- --nocapture --skip jupiter --skip mainnet
+
+      - name: Generate LiteSVM A/B report
         run: |
           cd contracts/ab-integration-tests
           cargo test --test ab_comparison test_ab_multi_scenario_report -- --nocapture
-
-      - name: Run LiteSVM PR validation
-        run: |
-          cd contracts/ab-integration-tests
-          cargo test --test ab_comparison test_ab_pr_validation_litesvm -- --nocapture
 
       # ── Mainnet fork via solana-test-validator --clone ──
       - name: Create test keypair
@@ -99,6 +112,7 @@ jobs:
             solana cluster-version -u localhost 2>/dev/null && break
             sleep 1
           done
+          echo "Validator ready"
 
       - name: Run mainnet-fork E2E (solana-test-validator)
         run: |
@@ -112,15 +126,16 @@ jobs:
       - name: Publish reports to Job Summary
         if: always()
         run: |
-          echo "# Main Branch A/B Report" >> $GITHUB_STEP_SUMMARY
+          echo "# A/B Test Reports" >> $GITHUB_STEP_SUMMARY
 
           if [ -f reports/ab/pr-validation/latest.md ]; then
+            echo "" >> $GITHUB_STEP_SUMMARY
             cat reports/ab/pr-validation/latest.md >> $GITHUB_STEP_SUMMARY
           fi
 
           if [ -f reports/ab/mainnet-fork/latest.json ]; then
             echo "" >> $GITHUB_STEP_SUMMARY
-            echo "## Mainnet-Fork" >> $GITHUB_STEP_SUMMARY
+            echo "## Mainnet-Fork Report" >> $GITHUB_STEP_SUMMARY
             echo '```json' >> $GITHUB_STEP_SUMMARY
             head -100 reports/ab/mainnet-fork/latest.json >> $GITHUB_STEP_SUMMARY
             echo '```' >> $GITHUB_STEP_SUMMARY
@@ -128,21 +143,16 @@ jobs:
 
           if [ -f reports/ab/latest.md ]; then
             echo "" >> $GITHUB_STEP_SUMMARY
+            echo "## Multi-Scenario CU Report" >> $GITHUB_STEP_SUMMARY
             cat reports/ab/latest.md >> $GITHUB_STEP_SUMMARY
           fi
 
-      - name: Commit and push report
-        run: |
-          if [ ! -f reports/ab/latest.md ]; then
-            echo "No report generated"
-            exit 0
-          fi
-          if git diff --quiet -- reports/ab; then
-            echo "No report changes"
-            exit 0
-          fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add reports/ab
-          git commit -m "chore(reports): refresh A/B report via LiteSVM"
-          git push
+      - name: Upload all reports
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ab-reports
+          path: |
+            reports/ab/latest.*
+            reports/ab/pr-validation/latest.*
+            reports/ab/mainnet-fork/latest.*

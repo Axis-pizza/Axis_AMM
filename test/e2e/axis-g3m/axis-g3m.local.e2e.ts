@@ -439,14 +439,30 @@ async function main() {
 
   // ── 10. Rebalance with wrong Jupiter program → InvalidProgram ───────────
   console.log("▶ Step 10: Rebalance with wrong Jupiter program → expect InvalidProgram (7020)");
-  // Build a Rebalance instruction that includes an extra account at position
-  // 2 + TOKEN_COUNT, which the program treats as the Jupiter program account.
-  // Pass a random pubkey — verify_jupiter_program should reject it.
+
+  // First, induce drift again with another big swap so needs_rebalance() passes
+  console.log("  Re-inducing drift with a large swap...");
+  const driftSwap = new Transaction().add(
+    ixSwap(payer.publicKey, poolState,
+      userTokenAccounts[0], userTokenAccounts[2],
+      vaultAccounts[0], vaultAccounts[2],
+      0, 2,
+      BIG_SWAP, 0n,
+    )
+  );
+  await sendAndConfirmTransaction(conn, driftSwap, [payer]);
+
+  // Now build a Rebalance with a fake Jupiter program account
+  const poolForJupTest = await readPoolState(conn, poolState);
+  const totalRes2 = poolForJupTest.reserves.reduce((a, b) => a + b, 0n);
+  const avgRes2 = totalRes2 / BigInt(TOKEN_COUNT);
+  const jupTargetReserves = Array(TOKEN_COUNT).fill(avgRes2);
+
   const fakeJupiter = Keypair.generate().publicKey;
   const rebalWithJupIx = (() => {
-    const reservesBuf = Buffer.alloc(targetReserves.length * 8);
-    for (let i = 0; i < targetReserves.length; i++) {
-      reservesBuf.writeBigUInt64LE(targetReserves[i], i * 8);
+    const reservesBuf = Buffer.alloc(jupTargetReserves.length * 8);
+    for (let i = 0; i < jupTargetReserves.length; i++) {
+      reservesBuf.writeBigUInt64LE(jupTargetReserves[i], i * 8);
     }
     const data = Buffer.concat([Buffer.from([3]), reservesBuf]);
 

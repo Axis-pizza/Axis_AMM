@@ -1,5 +1,5 @@
 {
-  "generated_at": "1775831549s-since-epoch",
+  "generated_at": "1776094883s-since-epoch",
   "environment": "LiteSVM (local, multi-scenario)",
   "scenarios": [
     {
@@ -88,7 +88,7 @@
         100000000
       ],
       "g3m": {
-        "init_cu": 12500,
+        "init_cu": 14000,
         "swap_cu": 10969,
         "drift_swap_cu": 0,
         "check_drift_cu": 1166,
@@ -117,14 +117,14 @@
         "timeouts": 0,
         "critical_invariant_violation": false,
         "slot_to_finality": 0,
-        "cold_start_cu": 12500,
+        "cold_start_cu": 14000,
         "steady_state_cu": 20754,
-        "total_cu": 33254
+        "total_cu": 34754
       },
       "pfda3": {
         "init_cu": 0,
         "add_liq_cu": 0,
-        "swap_request_cu": 18240,
+        "swap_request_cu": 13740,
         "clear_batch_cu": 20803,
         "claim_cu": 3033,
         "clearing_prices": [
@@ -242,7 +242,7 @@
         1000000000
       ],
       "g3m": {
-        "init_cu": 12498,
+        "init_cu": 10998,
         "swap_cu": 10975,
         "drift_swap_cu": 0,
         "check_drift_cu": 1166,
@@ -271,14 +271,14 @@
         "timeouts": 0,
         "critical_invariant_violation": false,
         "slot_to_finality": 0,
-        "cold_start_cu": 12498,
+        "cold_start_cu": 10998,
         "steady_state_cu": 20763,
-        "total_cu": 33261
+        "total_cu": 31761
       },
       "pfda3": {
         "init_cu": 0,
         "add_liq_cu": 0,
-        "swap_request_cu": 13740,
+        "swap_request_cu": 9240,
         "clear_batch_cu": 14804,
         "claim_cu": 3033,
         "clearing_prices": [

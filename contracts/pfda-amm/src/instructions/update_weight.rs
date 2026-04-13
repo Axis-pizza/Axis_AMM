@@ -45,6 +45,11 @@ pub fn process_update_weight(
         return Err(PfmmError::InvalidDiscriminator.into());
     }
 
+    // Verify authority: only the pool creator can update weights
+    if authority.key() != &pool.authority {
+        return Err(PfmmError::Unauthorized.into());
+    }
+
     // Verify PDA
     let (expected, _) = pubkey::find_program_address(
         &[b"pool", &pool.token_a_mint, &pool.token_b_mint],

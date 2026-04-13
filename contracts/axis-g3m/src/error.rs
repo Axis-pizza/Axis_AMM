@@ -43,6 +43,8 @@ pub enum G3mError {
     PerTokenDriftExceeded = 7018,
     /// Single-token reserve change exceeds maximum (attestation mode)
     ReserveChangeExceeded = 7019,
+    /// CPI target is not the Jupiter V6 program
+    InvalidProgram = 7020,
 }
 
 impl From<G3mError> for ProgramError {

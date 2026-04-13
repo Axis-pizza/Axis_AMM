@@ -124,6 +124,7 @@ pub fn process_initialize_pool(
             current_window_end: clock.slot + window_slots,
             base_fee_bps,
             fee_discount_bps,
+            authority: *payer.key(),
             bump: pool_bump,
             reentrancy_guard: 0,
             _padding: [0; 2],

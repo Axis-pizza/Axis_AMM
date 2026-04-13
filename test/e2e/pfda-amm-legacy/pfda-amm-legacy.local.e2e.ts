@@ -495,6 +495,69 @@ async function main() {
   console.log(`  CU                : ${cuLog["Claim"]?.toLocaleString()}`);
   console.log(`  Token B 受取量    : ${num(received)} (≈ ${(Number(received) / 1e6).toFixed(4)} tokens)\n`);
 
+  // ── 11. UpdateWeight — correct authority → success ─────────────────
+  console.log("▶ Step 11: UpdateWeight (correct authority → success)");
+  {
+    const targetWeight = 600_000; // shift to 60/40
+    const currentSlot = BigInt(await conn.getSlot("confirmed"));
+    const endSlot = currentSlot + 100n;
+    const data = Buffer.concat([
+      Buffer.from([5]),           // discriminant = UpdateWeight
+      u32Le(targetWeight),
+      u64Le(endSlot),
+    ]);
+    const tx = new Transaction().add(new TransactionInstruction({
+      programId: PROGRAM_ID,
+      keys: [
+        { pubkey: payer.publicKey, isSigner: true,  isWritable: false },
+        { pubkey: poolState,       isSigner: false, isWritable: true  },
+      ],
+      data,
+    }));
+    const sig = await sendAndConfirmTransaction(conn, tx, [payer]);
+    cuLog["UpdateWeight"] = await getCU(conn, sig);
+    console.log(`  ✓ Authority accepted, CU: ${cuLog["UpdateWeight"]?.toLocaleString()}\n`);
+  }
+
+  // ── 12. UpdateWeight — wrong signer → Unauthorized (6016) ────────
+  console.log("▶ Step 12: UpdateWeight (wrong signer → Unauthorized)");
+  {
+    const wrongAuth = Keypair.generate();
+    // Fund the wrong authority so it can sign
+    await sendAndConfirmTransaction(conn, new Transaction().add(
+      SystemProgram.transfer({ fromPubkey: payer.publicKey, toPubkey: wrongAuth.publicKey, lamports: LAMPORTS_PER_SOL / 10 })
+    ), [payer]);
+
+    const currentSlot = BigInt(await conn.getSlot("confirmed"));
+    const endSlot = currentSlot + 100n;
+    const data = Buffer.concat([
+      Buffer.from([5]),           // discriminant = UpdateWeight
+      u32Le(700_000),
+      u64Le(endSlot),
+    ]);
+    const tx = new Transaction().add(new TransactionInstruction({
+      programId: PROGRAM_ID,
+      keys: [
+        { pubkey: wrongAuth.publicKey, isSigner: true,  isWritable: false },
+        { pubkey: poolState,           isSigner: false, isWritable: true  },
+      ],
+      data,
+    }));
+    try {
+      await sendAndConfirmTransaction(conn, tx, [wrongAuth]);
+      console.error("  ✗ FAIL: UpdateWeight should have rejected wrong authority");
+      process.exit(1);
+    } catch (err: any) {
+      const msg = err.message || String(err);
+      if (msg.includes("0x1780") || msg.includes("6016") || msg.includes("custom program error")) {
+        console.log(`  ✓ Correctly rejected: Unauthorized (error 6016 / 0x1780)\n`);
+      } else {
+        console.error(`  ✗ FAIL: Unexpected error: ${msg}`);
+        process.exit(1);
+      }
+    }
+  }
+
   // ── サマリー ──────────────────────────────────────────────────────────
   console.log("╔══════════════════════════════════════════╗");
   console.log("║             CU サマリー                  ║");

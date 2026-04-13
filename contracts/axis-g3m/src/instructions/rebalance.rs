@@ -34,7 +34,7 @@ const MAX_ATTESTATION_RESERVE_CHANGE_BPS: u64 = 5000;
 ///   1: pool_state    (writable, PDA)
 ///   2..2+N: vault token accounts (readable, to verify balances)
 pub fn process_rebalance(
-    _program_id: &Pubkey,
+    program_id: &Pubkey,
     accounts: &[AccountInfo],
     new_reserves: &[u64],
 ) -> ProgramResult {
@@ -43,6 +43,11 @@ pub fn process_rebalance(
 
     if !authority.is_signer() {
         return Err(ProgramError::MissingRequiredSignature);
+    }
+
+    // Verify pool account is owned by this program (prevents spoofed accounts)
+    if pool_account.owner() != program_id {
+        return Err(ProgramError::IllegalOwner);
     }
 
     // Read pool state
@@ -56,9 +61,9 @@ pub fn process_rebalance(
         return Err(G3mError::PoolPaused.into());
     }
 
-    // Verify authority
+    // Verify caller is the pool authority — prevents unauthorized rebalances
     if authority.key().as_ref() != &pool.authority {
-        return Err(G3mError::OwnerMismatch.into());
+        return Err(G3mError::Unauthorized.into());
     }
 
     let tc = pool.token_count as usize;

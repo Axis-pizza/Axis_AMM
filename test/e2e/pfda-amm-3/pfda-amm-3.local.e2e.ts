@@ -406,7 +406,7 @@ async function main() {
   });
   // Return data is in the transaction metadata if available
   if ((clearTx?.meta as any)?.returnData?.data) {
-    const returnBuf = Buffer.from((clearTx.meta as any).returnData.data[0], "base64");
+    const returnBuf = Buffer.from((clearTx!.meta as any).returnData.data[0], "base64");
     const oracleUsed = returnBuf[56];
     console.log(`  oracle_used flag in return_data: ${oracleUsed} (expected 0)`);
     if (oracleUsed !== 0) {

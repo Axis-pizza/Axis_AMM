@@ -64,11 +64,11 @@ impl PoolState {
         let elapsed = current_slot - self.weight_start_slot;
         let total = self.weight_end_slot - self.weight_start_slot;
         let delta = if self.target_weight_a >= self.current_weight_a {
-            let d = (self.target_weight_a - self.current_weight_a) as u64;
-            (d * elapsed / total) as u32
+            let d = (self.target_weight_a - self.current_weight_a) as u128;
+            ((d * elapsed as u128) / total as u128) as u32
         } else {
-            let d = (self.current_weight_a - self.target_weight_a) as u64;
-            let sub = (d * elapsed / total) as u32;
+            let d = (self.current_weight_a - self.target_weight_a) as u128;
+            let sub = ((d * elapsed as u128) / total as u128) as u32;
             // saturating sub handled below
             return self.current_weight_a.saturating_sub(sub);
         };

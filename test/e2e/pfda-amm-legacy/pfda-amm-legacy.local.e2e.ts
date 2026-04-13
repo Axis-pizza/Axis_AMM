@@ -495,6 +495,104 @@ async function main() {
   console.log(`  CU                : ${cuLog["Claim"]?.toLocaleString()}`);
   console.log(`  Token B 受取量    : ${num(received)} (≈ ${(Number(received) / 1e6).toFixed(4)} tokens)\n`);
 
+  // ── 11. SetPaused(true) → SwapRequest fails with PoolPaused ────────
+  console.log("▶ Step 11: SetPaused(true) by authority → SwapRequest should fail with PoolPaused (6018)");
+  {
+    // Pause the pool: discriminant=6, paused=1
+    const pauseIx = new TransactionInstruction({
+      programId: PROGRAM_ID,
+      keys: [
+        { pubkey: payer.publicKey, isSigner: true,  isWritable: false },
+        { pubkey: poolState,       isSigner: false, isWritable: true  },
+      ],
+      data: Buffer.from([6, 1]),
+    });
+    const pauseTx = new Transaction().add(pauseIx);
+    const pauseSig = await sendAndConfirmTransaction(conn, pauseTx, [payer]);
+    console.log(`  ✓ SetPaused(true) tx: ${pauseSig.slice(0, 20)}...`);
+
+    // Now try a SwapRequest — should fail with PoolPaused (6018 / 0x1782)
+    const poolAfterPause = await readPoolState(conn, poolState);
+    const currentBatch = poolAfterPause.currentBatchId;
+    const [queueCur] = findQueue(poolState, currentBatch);
+    const [ticketCur] = findTicket(poolState, payer.publicKey, currentBatch);
+
+    const swapWhilePausedIx = ixSwapRequest(
+      payer.publicKey, poolState, queueCur, ticketCur,
+      userTA, userTB, vaultAKp.publicKey, vaultBKp.publicKey,
+      1_000_000n, 0n, 0n,
+    );
+    const swapWhilePausedTx = new Transaction().add(swapWhilePausedIx);
+    try {
+      await sendAndConfirmTransaction(conn, swapWhilePausedTx, [payer]);
+      console.log("  ✗ SwapRequest should have failed on paused pool!");
+      process.exit(1);
+    } catch (err: any) {
+      const msg = err?.message ?? String(err);
+      if (msg.includes("0x1782") || msg.includes("6018")) {
+        console.log("  ✓ SwapRequest correctly rejected with PoolPaused (6018 / 0x1782)");
+      } else {
+        console.log(`  ✗ SwapRequest failed with unexpected error: ${msg}`);
+        process.exit(1);
+      }
+    }
+    console.log();
+  }
+
+  // ── 12. SetPaused(false) → unpause, then wrong signer → Unauthorized ─
+  console.log("▶ Step 12: SetPaused(false) unpause, then wrong signer → Unauthorized (6016)");
+  {
+    // Unpause the pool: discriminant=6, paused=0
+    const unpauseIx = new TransactionInstruction({
+      programId: PROGRAM_ID,
+      keys: [
+        { pubkey: payer.publicKey, isSigner: true,  isWritable: false },
+        { pubkey: poolState,       isSigner: false, isWritable: true  },
+      ],
+      data: Buffer.from([6, 0]),
+    });
+    const unpauseTx = new Transaction().add(unpauseIx);
+    const unpauseSig = await sendAndConfirmTransaction(conn, unpauseTx, [payer]);
+    console.log(`  ✓ SetPaused(false) tx: ${unpauseSig.slice(0, 20)}...`);
+
+    // Create a random keypair and fund it
+    const wrongSigner = Keypair.generate();
+    const fundTx = new Transaction().add(
+      SystemProgram.transfer({
+        fromPubkey: payer.publicKey,
+        toPubkey: wrongSigner.publicKey,
+        lamports: LAMPORTS_PER_SOL / 10,
+      }),
+    );
+    await sendAndConfirmTransaction(conn, fundTx, [payer]);
+    console.log(`  Funded wrong signer: ${wrongSigner.publicKey.toBase58().slice(0, 16)}...`);
+
+    // Try SetPaused signed by wrong key → expect Unauthorized (6016 / 0x1780)
+    const wrongPauseIx = new TransactionInstruction({
+      programId: PROGRAM_ID,
+      keys: [
+        { pubkey: wrongSigner.publicKey, isSigner: true,  isWritable: false },
+        { pubkey: poolState,             isSigner: false, isWritable: true  },
+      ],
+      data: Buffer.from([6, 1]),
+    });
+    const wrongPauseTx = new Transaction().add(wrongPauseIx);
+    try {
+      await sendAndConfirmTransaction(conn, wrongPauseTx, [wrongSigner]);
+      console.log("  ✗ SetPaused by wrong signer should have failed!");
+      process.exit(1);
+    } catch (err: any) {
+      const msg = err?.message ?? String(err);
+      if (msg.includes("0x1780") || msg.includes("6016")) {
+        console.log("  ✓ SetPaused by wrong signer correctly rejected with Unauthorized (6016 / 0x1780)");
+      } else {
+        console.log(`  ✗ SetPaused failed with unexpected error: ${msg}`);
+        process.exit(1);
+      }
+    }
+    console.log();
+  }
+
   // ── サマリー ──────────────────────────────────────────────────────────
   console.log("╔══════════════════════════════════════════╗");
   console.log("║             CU サマリー                  ║");

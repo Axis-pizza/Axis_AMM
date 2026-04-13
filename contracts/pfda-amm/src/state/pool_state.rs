@@ -1,4 +1,4 @@
-/// PoolState - 216 bytes, repr(C)
+/// PoolState - 240 bytes, repr(C)
 ///
 /// PDA seeds: [b"pool", token_a_mint, token_b_mint]
 #[repr(C)]
@@ -36,6 +36,8 @@ pub struct PoolState {
     pub base_fee_bps: u16,
     /// Fee discount for searchers in basis points
     pub fee_discount_bps: u16,
+    /// Pool authority (creator, can update weights)
+    pub authority: [u8; 32],
     /// PDA bump seed
     pub bump: u8,
     /// Reentrancy guard: 0 = open, 1 = locked
@@ -69,22 +71,19 @@ impl PoolState {
         } else {
             let d = (self.current_weight_a - self.target_weight_a) as u128;
             let sub = ((d * elapsed as u128) / total as u128) as u32;
-            // saturating sub handled below
             return self.current_weight_a.saturating_sub(sub);
         };
         self.current_weight_a + delta
     }
 }
 
-// Compile-time size assertion (actual layout = 208 bytes)
-const _: () = assert!(core::mem::size_of::<PoolState>() == 208);
+// Compile-time size assertion (actual layout = 240 bytes)
+const _: () = assert!(core::mem::size_of::<PoolState>() == 240);
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// Helper: create a zeroed PoolState and set only the fields needed for
-    /// `interpolated_weight_a`.
     fn pool_with_weight_transition(
         current_weight_a: u32,
         target_weight_a: u32,
@@ -102,47 +101,33 @@ mod tests {
 
     #[test]
     fn interpolated_weight_large_delta_no_overflow() {
-        // Regression test for u128 arithmetic: weight_delta * elapsed must
-        // not overflow even when elapsed = u32::MAX.
         let start = 0u64;
-        let end = start + u32::MAX as u64 + 1; // total = 2^32
+        let end = start + u32::MAX as u64 + 1;
         let current = 1_000;
-        let target = 1_000_000; // delta = 999_000
-        let elapsed_slots = u32::MAX as u64; // nearly the full range
+        let target = 1_000_000;
+        let elapsed_slots = u32::MAX as u64;
 
         let ps = pool_with_weight_transition(current, target, start, end);
         let result = ps.interpolated_weight_a(start + elapsed_slots);
 
-        // expected = current + delta * elapsed / total
-        //          = 1_000 + 999_000 * (2^32 - 1) / 2^32
-        // The integer division truncates, so expected ≈ target - 1 but let's
-        // compute exactly:
         let delta = (target - current) as u128;
         let expected = current + ((delta * elapsed_slots as u128) / (end - start) as u128) as u32;
-        assert_eq!(result, expected, "u128 interpolation should handle large elapsed without overflow");
+        assert_eq!(result, expected);
     }
 
     #[test]
     fn interpolated_weight_at_boundaries() {
         let ps = pool_with_weight_transition(200_000, 800_000, 100, 200);
-
-        // Before start → returns current
         assert_eq!(ps.interpolated_weight_a(50), 200_000);
-        // At start → returns current
         assert_eq!(ps.interpolated_weight_a(100), 200_000);
-        // At end → returns target
         assert_eq!(ps.interpolated_weight_a(200), 800_000);
-        // Past end → returns target
         assert_eq!(ps.interpolated_weight_a(999), 800_000);
-        // Midpoint → halfway
         assert_eq!(ps.interpolated_weight_a(150), 500_000);
     }
 
     #[test]
     fn interpolated_weight_decreasing() {
-        // Target < current (decreasing weight)
         let ps = pool_with_weight_transition(800_000, 200_000, 0, 100);
-
         assert_eq!(ps.interpolated_weight_a(0), 800_000);
         assert_eq!(ps.interpolated_weight_a(50), 500_000);
         assert_eq!(ps.interpolated_weight_a(100), 200_000);

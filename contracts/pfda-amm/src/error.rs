@@ -35,6 +35,8 @@ pub enum PfmmError {
     InvalidWindowSlots = 6014,
     /// Account already initialized
     AlreadyInitialized = 6015,
+    /// Caller is not the pool authority
+    Unauthorized = 6016,
 }
 
 impl From<PfmmError> for ProgramError {

@@ -38,6 +38,7 @@ enum Instruction {
     AddLiquidity = 4,
     UpdateWeight = 5,
     SetPaused = 6,
+    CloseBatchHistory = 7,
 }
 
 impl Instruction {
@@ -50,6 +51,7 @@ impl Instruction {
             4 => Some(Instruction::AddLiquidity),
             5 => Some(Instruction::UpdateWeight),
             6 => Some(Instruction::SetPaused),
+            7 => Some(Instruction::CloseBatchHistory),
             _ => None,
         }
     }
@@ -165,6 +167,10 @@ pub fn process_instruction(
             }
             let paused = data[0] != 0;
             instructions::process_set_paused(program_id, accounts, paused)
+        }
+
+        Instruction::CloseBatchHistory => {
+            instructions::process_close_batch_history(program_id, accounts)
         }
     }
 }

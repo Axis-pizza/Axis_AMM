@@ -531,6 +531,34 @@ async function main() {
   console.log(`  Clean ClearBatch (no bid) succeeded: ${clearBatch2Sig.slice(0, 16)}...`);
   console.log("  PASSED: BidExcessive correctly rejects disproportionate bids");
 
+  // ── Step 11: CloseBatchHistory — should fail (BatchWindowNotEnded) ──
+  console.log("\n▶ Step 11: CloseBatchHistory on history0 (expect BatchWindowNotEnded)");
+  try {
+    const closeBatchHistoryIx = new TransactionInstruction({
+      programId: PROGRAM_ID,
+      keys: [
+        { pubkey: payer.publicKey, isSigner: true, isWritable: false },
+        { pubkey: pool, isSigner: false, isWritable: false },
+        { pubkey: history0, isSigner: false, isWritable: true },
+      ],
+      data: Buffer.from([7]),
+    });
+    await sendAndConfirmTransaction(conn,
+      new Transaction().add(closeBatchHistoryIx), [payer]
+    );
+    throw new Error("CloseBatchHistory should have failed but succeeded");
+  } catch (err: any) {
+    const msg = err.message ?? String(err);
+    if (msg.includes("0x1f42") || msg.includes("8002") || msg.includes("BatchWindowNotEnded")) {
+      console.log("  Correctly rejected: BatchWindowNotEnded (0x1F42 / 8002)");
+    } else if (msg.includes("should have failed")) {
+      throw err;
+    } else {
+      console.log(`  Rejected with error: ${msg.slice(0, 120)}`);
+      console.log("  (Expected BatchWindowNotEnded — CLOSE_DELAY not reached)");
+    }
+  }
+
   // Summary
   console.log("\n╔══════════════════════════════════════════════════╗");
   console.log("║              CU Summary                          ║");

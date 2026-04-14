@@ -33,6 +33,7 @@ enum Instruction {
     Claim = 3,
     AddLiquidity = 4,
     WithdrawFees = 5,
+    CloseBatchHistory = 7,
 }
 
 impl Instruction {
@@ -44,6 +45,7 @@ impl Instruction {
             3 => Some(Instruction::Claim),
             4 => Some(Instruction::AddLiquidity),
             5 => Some(Instruction::WithdrawFees),
+            7 => Some(Instruction::CloseBatchHistory),
             _ => None,
         }
     }
@@ -136,6 +138,10 @@ pub fn process_instruction(
             let a1 = u64::from_le_bytes([data[8], data[9], data[10], data[11], data[12], data[13], data[14], data[15]]);
             let a2 = u64::from_le_bytes([data[16], data[17], data[18], data[19], data[20], data[21], data[22], data[23]]);
             instructions::process_withdraw_fees(program_id, accounts, [a0, a1, a2])
+        }
+
+        Instruction::CloseBatchHistory => {
+            instructions::process_close_batch_history_3(program_id, accounts)
         }
     }
 }

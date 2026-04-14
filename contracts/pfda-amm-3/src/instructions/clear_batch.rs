@@ -82,6 +82,23 @@ pub fn process_clear_batch_3(
         if bid_lamports < crate::jito::MIN_BID_LAMPORTS {
             return Err(Pfda3Error::BidTooLow.into());
         }
+        // Enforce bid cap: bid must not exceed alpha% of estimated batch fees
+        {
+            let data = queue_ai.try_borrow_data()?;
+            let queue = unsafe { load::<BatchQueue3>(&data) }
+                .ok_or(ProgramError::InvalidAccountData)?;
+            let total_volume: u128 = queue.total_in.iter()
+                .fold(0u128, |acc, &x| acc.saturating_add(x as u128));
+            let total_fees = total_volume
+                .saturating_mul(base_fee_bps as u128)
+                / 10_000;
+            let max_bid = total_fees
+                .saturating_mul(crate::jito::DEFAULT_ALPHA_BPS as u128)
+                / 10_000;
+            if (bid_lamports as u128) > max_bid {
+                return Err(Pfda3Error::BidExcessive.into());
+            }
+        }
         if accounts.len() <= 9 {
             return Err(Pfda3Error::BidWithoutTreasury.into());
         }

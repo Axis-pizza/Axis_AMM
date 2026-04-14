@@ -39,6 +39,7 @@ enum Instruction {
     UpdateWeight = 5,
     SetPaused = 6,
     CloseBatchHistory = 7,
+    CloseExpiredTicket = 8,
 }
 
 impl Instruction {
@@ -52,6 +53,7 @@ impl Instruction {
             5 => Some(Instruction::UpdateWeight),
             6 => Some(Instruction::SetPaused),
             7 => Some(Instruction::CloseBatchHistory),
+            8 => Some(Instruction::CloseExpiredTicket),
             _ => None,
         }
     }
@@ -171,6 +173,10 @@ pub fn process_instruction(
 
         Instruction::CloseBatchHistory => {
             instructions::process_close_batch_history(program_id, accounts)
+        }
+
+        Instruction::CloseExpiredTicket => {
+            instructions::process_close_expired_ticket(program_id, accounts)
         }
     }
 }

@@ -157,9 +157,10 @@ pub fn process_initialize_pool(
     pool.drift_threshold_bps = drift_threshold_bps;
     pool.last_rebalance_slot = Clock::get()?.slot;
     pool.rebalance_cooldown = rebalance_cooldown;
+    pool.max_invariant_drift_bps = 50; // 0.5% default
     pool.paused = 0;
     pool.bump = bump;
-    pool._padding = [0u8; 6];
+    pool._padding = [0u8; 4];
 
     Ok(())
 }

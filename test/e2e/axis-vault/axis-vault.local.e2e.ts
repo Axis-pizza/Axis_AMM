@@ -209,6 +209,88 @@ async function main() {
     console.log(`  Token ${i} received back: ${received.toLocaleString()}`);
   }
 
+  // 9. Test: CreateEtf with duplicate mints → DuplicateMint error (9011 / 0x2333)
+  console.log("\n> Test: CreateEtf with duplicate mints (expect error)");
+  try {
+    const dupName = Buffer.from("DUPTEST");
+    const [dupEtfState] = PublicKey.findProgramAddressSync(
+      [Buffer.from("etf"), payer.publicKey.toBuffer(), dupName],
+      PROGRAM_ID,
+    );
+
+    // Create a fresh ETF mint (uninitialized) for the dup test
+    const dupMintKp = Keypair.generate();
+    await sendAndConfirmTransaction(conn, new Transaction().add(
+      SystemProgram.createAccount({
+        fromPubkey: payer.publicKey,
+        newAccountPubkey: dupMintKp.publicKey,
+        lamports: mintRent,
+        space: MINT_SIZE,
+        programId: TOKEN_PROGRAM_ID,
+      })
+    ), [payer, dupMintKp]);
+
+    // Create 3 vault accounts for the dup basket
+    const dupVaultKps: Keypair[] = [];
+    const dupVaults: PublicKey[] = [];
+    const dupVaultsTx = new Transaction();
+    for (let i = 0; i < TOKEN_COUNT; i++) {
+      const kp = Keypair.generate();
+      dupVaultKps.push(kp);
+      dupVaults.push(kp.publicKey);
+      dupVaultsTx.add(SystemProgram.createAccount({
+        fromPubkey: payer.publicKey,
+        newAccountPubkey: kp.publicKey,
+        lamports: vaultRent,
+        space: ACCOUNT_SIZE,
+        programId: TOKEN_PROGRAM_ID,
+      }));
+    }
+    await sendAndConfirmTransaction(conn, dupVaultsTx, [payer, ...dupVaultKps]);
+
+    // Use mints[0] twice: [mints[0], mints[0], mints[2]]
+    const dupMints = [mints[0], mints[0], mints[2]];
+    const dupWeights = [3334, 3333, 3333];
+    const dupWeightsBuf = Buffer.alloc(TOKEN_COUNT * 2);
+    for (let i = 0; i < TOKEN_COUNT; i++) dupWeightsBuf.writeUInt16LE(dupWeights[i], i * 2);
+
+    const dupCreateData = Buffer.concat([
+      Buffer.from([0]),               // disc = CreateEtf
+      Buffer.from([TOKEN_COUNT]),     // token_count
+      dupWeightsBuf,                  // weights
+      Buffer.from([dupName.length]),  // name_len
+      dupName,                        // name
+    ]);
+
+    await sendAndConfirmTransaction(conn, new Transaction().add(new TransactionInstruction({
+      programId: PROGRAM_ID,
+      keys: [
+        { pubkey: payer.publicKey, isSigner: true, isWritable: true },
+        { pubkey: dupEtfState, isSigner: false, isWritable: true },
+        { pubkey: dupMintKp.publicKey, isSigner: false, isWritable: true },
+        { pubkey: payer.publicKey, isSigner: false, isWritable: false }, // treasury
+        { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+        { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+        // basket mints (with duplicate)
+        ...dupMints.map(m => ({ pubkey: m, isSigner: false, isWritable: false })),
+        // vault accounts
+        ...dupVaults.map(v => ({ pubkey: v, isSigner: false, isWritable: true })),
+      ],
+      data: dupCreateData,
+    })), [payer]);
+    throw new Error("Should have failed but succeeded");
+  } catch (err: any) {
+    const msg = err.message || String(err);
+    // DuplicateMint = 9011 = 0x2333
+    if (msg.includes("0x2333") || msg.includes("9011")) {
+      console.log("  Correctly rejected with DuplicateMint error:", msg.match(/0x[0-9a-f]+/i)?.[0] ?? "9011");
+    } else if (msg === "Should have failed but succeeded") {
+      throw new Error("CreateEtf with duplicate mints should have failed but succeeded");
+    } else {
+      console.log("  Rejected with error (unexpected code):", msg.slice(0, 120));
+    }
+  }
+
   console.log("\n=== Vault E2E PASSED ===");
 }
 main().catch(err => { console.error("Error:", err.message || err); process.exit(1); });

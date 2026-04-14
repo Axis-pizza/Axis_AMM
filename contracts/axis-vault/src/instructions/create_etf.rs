@@ -133,6 +133,15 @@ pub fn process_create_etf(
         token_vaults[i] = *vault.key();
     }
 
+    // Check for duplicate mints in basket
+    for i in 0..tc {
+        for j in (i + 1)..tc {
+            if token_mints[i] == token_mints[j] {
+                return Err(VaultError::DuplicateMint.into());
+            }
+        }
+    }
+
     // Write EtfState
     {
         let mut data = etf_state_ai.try_borrow_mut_data()?;

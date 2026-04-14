@@ -1,5 +1,5 @@
 {
-  "generated_at": "1776094883s-since-epoch",
+  "generated_at": "1776135767s-since-epoch",
   "environment": "LiteSVM (local, multi-scenario)",
   "scenarios": [
     {
@@ -15,7 +15,7 @@
         "swap_cu": 10977,
         "drift_swap_cu": 0,
         "check_drift_cu": 1166,
-        "rebalance_cu": 8628,
+        "rebalance_cu": 8664,
         "pre_k": 0,
         "post_k": 0,
         "pre_reserves": [],
@@ -41,13 +41,13 @@
         "critical_invariant_violation": false,
         "slot_to_finality": 0,
         "cold_start_cu": 10992,
-        "steady_state_cu": 20771,
-        "total_cu": 31763
+        "steady_state_cu": 20807,
+        "total_cu": 31799
       },
       "pfda3": {
         "init_cu": 0,
         "add_liq_cu": 0,
-        "swap_request_cu": 9240,
+        "swap_request_cu": 6240,
         "clear_batch_cu": 10301,
         "claim_cu": 3033,
         "clearing_prices": [
@@ -88,11 +88,11 @@
         100000000
       ],
       "g3m": {
-        "init_cu": 14000,
+        "init_cu": 11000,
         "swap_cu": 10969,
         "drift_swap_cu": 0,
         "check_drift_cu": 1166,
-        "rebalance_cu": 8619,
+        "rebalance_cu": 8655,
         "pre_k": 0,
         "post_k": 0,
         "pre_reserves": [],
@@ -117,14 +117,14 @@
         "timeouts": 0,
         "critical_invariant_violation": false,
         "slot_to_finality": 0,
-        "cold_start_cu": 14000,
-        "steady_state_cu": 20754,
-        "total_cu": 34754
+        "cold_start_cu": 11000,
+        "steady_state_cu": 20790,
+        "total_cu": 31790
       },
       "pfda3": {
         "init_cu": 0,
         "add_liq_cu": 0,
-        "swap_request_cu": 13740,
+        "swap_request_cu": 21240,
         "clear_batch_cu": 20803,
         "claim_cu": 3033,
         "clearing_prices": [
@@ -169,7 +169,7 @@
         "swap_cu": 10964,
         "drift_swap_cu": 0,
         "check_drift_cu": 1166,
-        "rebalance_cu": 8621,
+        "rebalance_cu": 8657,
         "pre_k": 0,
         "post_k": 0,
         "pre_reserves": [],
@@ -195,8 +195,8 @@
         "critical_invariant_violation": false,
         "slot_to_finality": 0,
         "cold_start_cu": 10998,
-        "steady_state_cu": 20751,
-        "total_cu": 31749
+        "steady_state_cu": 20787,
+        "total_cu": 31785
       },
       "pfda3": {
         "init_cu": 0,
@@ -246,7 +246,7 @@
         "swap_cu": 10975,
         "drift_swap_cu": 0,
         "check_drift_cu": 1166,
-        "rebalance_cu": 8622,
+        "rebalance_cu": 8658,
         "pre_k": 0,
         "post_k": 0,
         "pre_reserves": [],
@@ -272,13 +272,13 @@
         "critical_invariant_violation": false,
         "slot_to_finality": 0,
         "cold_start_cu": 10998,
-        "steady_state_cu": 20763,
-        "total_cu": 31761
+        "steady_state_cu": 20799,
+        "total_cu": 31797
       },
       "pfda3": {
         "init_cu": 0,
         "add_liq_cu": 0,
-        "swap_request_cu": 9240,
+        "swap_request_cu": 12240,
         "clear_batch_cu": 14804,
         "claim_cu": 3033,
         "clearing_prices": [

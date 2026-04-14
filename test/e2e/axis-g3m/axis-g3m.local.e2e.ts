@@ -437,8 +437,40 @@ async function main() {
   }
   console.log();
 
-  // ── 10. Rebalance with wrong Jupiter program → InvalidProgram ───────────
-  console.log("▶ Step 10: Rebalance with wrong Jupiter program → expect InvalidProgram (7020)");
+  // ── 10. Rebalance by wrong authority → Unauthorized ─────────────────────
+  console.log("▶ Step 10: Rebalance by wrong authority → expect Unauthorized (7020)");
+  const wrongAuth = Keypair.generate();
+  // Fund the wrong authority so it can pay for the transaction
+  const fundTx = new Transaction().add(
+    SystemProgram.transfer({
+      fromPubkey: payer.publicKey,
+      toPubkey: wrongAuth.publicKey,
+      lamports: LAMPORTS_PER_SOL / 10,
+    })
+  );
+  await sendAndConfirmTransaction(conn, fundTx, [payer]);
+
+  const wrongRebalTx = new Transaction().add(
+    ixRebalance(wrongAuth.publicKey, poolState, targetReserves)
+  );
+  try {
+    await sendAndConfirmTransaction(conn, wrongRebalTx, [wrongAuth]);
+    console.log("  ✗ FAIL — transaction should have been rejected");
+    process.exit(1);
+  } catch (err: any) {
+    const msg = err?.message ?? String(err);
+    const hexCode = (7020).toString(16); // 0x1b6c
+    if (msg.includes("0x" + hexCode) || msg.includes("0x" + hexCode.toUpperCase())) {
+      console.log(`  ✓ Correctly rejected with Unauthorized (0x${hexCode})`);
+    } else {
+      console.log(`  ✗ FAIL — unexpected error: ${msg}`);
+      process.exit(1);
+    }
+  }
+  console.log();
+
+  // ── 11. Rebalance with wrong Jupiter program → InvalidProgram ───────────
+  console.log("▶ Step 11: Rebalance with wrong Jupiter program → expect InvalidProgram (7021)");
 
   // First, induce drift again with another big swap so needs_rebalance() passes
   console.log("  Re-inducing drift with a large swap...");
@@ -487,7 +519,7 @@ async function main() {
     process.exit(1);
   } catch (err: any) {
     const msg = err?.message ?? String(err);
-    const hexCode = (7020).toString(16); // 0x1b6c
+    const hexCode = (7021).toString(16); // 0x1b6d
     if (msg.includes("0x" + hexCode) || msg.includes("0x" + hexCode.toUpperCase())) {
       console.log(`  ✓ Correctly rejected with InvalidProgram (0x${hexCode})`);
     } else {

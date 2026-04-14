@@ -43,10 +43,29 @@ use pinocchio::{account_info::AccountInfo, program_error::ProgramError};
 
 use crate::error::PfmmError;
 
-// Switchboard program owner validation is done at runtime by the caller.
-// Mainnet program IDs:
-//   V2:  SW1TCH7qEPTdLsDHRgPuMQjbQxKdH2aBStViMFnt64f
-//   V3:  SBondMDrcV3K4kxZR1HNVT7osZxAHVHgYXL5Ze1oMUv
+/// Switchboard on-demand V3 program ID (mainnet): SBondMDrcV3K4kxZR1HNVT7osZxAHVHgYXL5Ze1oMUv
+const SWITCHBOARD_V3_PROGRAM_ID: [u8; 32] = [
+    0x06, 0x73, 0xbd, 0x46, 0xf2, 0xe4, 0x7e, 0x04,
+    0xf1, 0x2b, 0xd9, 0x2f, 0xb7, 0x31, 0x96, 0x8e,
+    0xcd, 0x9d, 0x97, 0x57, 0xc2, 0x74, 0xda, 0x87,
+    0x47, 0x6f, 0x46, 0x5c, 0x04, 0x0c, 0x65, 0x73,
+];
+
+/// Switchboard on-demand V3 devnet: Aio4gaXjXzJNVLtzwtNVmSqGKpANtXhybbkhtAC94ji2
+const SWITCHBOARD_DEVNET_PROGRAM_ID: [u8; 32] = [
+    0x90, 0x6e, 0x14, 0x64, 0xc5, 0xf8, 0xb7, 0x63,
+    0x3c, 0xc0, 0x5a, 0x42, 0x4c, 0xdd, 0xb3, 0xae,
+    0xcd, 0x6d, 0xab, 0xb8, 0xae, 0xc7, 0x47, 0xbc,
+    0x4f, 0x3e, 0x11, 0x30, 0x1e, 0x40, 0x63, 0xcb,
+];
+
+fn verify_switchboard_owner(feed_account: &AccountInfo) -> Result<(), ProgramError> {
+    let owner = feed_account.owner();
+    if owner != &SWITCHBOARD_V3_PROGRAM_ID && owner != &SWITCHBOARD_DEVNET_PROGRAM_ID {
+        return Err(PfmmError::OracleOwnerMismatch.into());
+    }
+    Ok(())
+}
 
 /// Offset of CurrentResult.value (i128) within PullFeedAccountData
 /// Verified empirically against devnet accounts owned by program
@@ -83,6 +102,8 @@ pub fn read_switchboard_price(
     max_stale_slots: u64,
     min_samples: u8,
 ) -> Result<u64, ProgramError> {
+    verify_switchboard_owner(feed_account)?;
+
     let data = feed_account.try_borrow_data()?;
 
     // Validate account size

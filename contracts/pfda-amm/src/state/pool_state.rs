@@ -66,17 +66,70 @@ impl PoolState {
         let elapsed = current_slot - self.weight_start_slot;
         let total = self.weight_end_slot - self.weight_start_slot;
         let delta = if self.target_weight_a >= self.current_weight_a {
-            let d = (self.target_weight_a - self.current_weight_a) as u64;
-            (d * elapsed / total) as u32
+            let d = (self.target_weight_a - self.current_weight_a) as u128;
+            ((d * elapsed as u128) / total as u128) as u32
         } else {
-            let d = (self.current_weight_a - self.target_weight_a) as u64;
-            let sub = (d * elapsed / total) as u32;
-            // saturating sub handled below
+            let d = (self.current_weight_a - self.target_weight_a) as u128;
+            let sub = ((d * elapsed as u128) / total as u128) as u32;
             return self.current_weight_a.saturating_sub(sub);
         };
         self.current_weight_a + delta
     }
 }
 
-// Compile-time size assertion (actual layout = 208 bytes)
+// Compile-time size assertion (actual layout = 240 bytes)
 const _: () = assert!(core::mem::size_of::<PoolState>() == 240);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pool_with_weight_transition(
+        current_weight_a: u32,
+        target_weight_a: u32,
+        start_slot: u64,
+        end_slot: u64,
+    ) -> PoolState {
+        let mut ps = unsafe { core::mem::zeroed::<PoolState>() };
+        ps.discriminator = PoolState::DISCRIMINATOR;
+        ps.current_weight_a = current_weight_a;
+        ps.target_weight_a = target_weight_a;
+        ps.weight_start_slot = start_slot;
+        ps.weight_end_slot = end_slot;
+        ps
+    }
+
+    #[test]
+    fn interpolated_weight_large_delta_no_overflow() {
+        let start = 0u64;
+        let end = start + u32::MAX as u64 + 1;
+        let current = 1_000;
+        let target = 1_000_000;
+        let elapsed_slots = u32::MAX as u64;
+
+        let ps = pool_with_weight_transition(current, target, start, end);
+        let result = ps.interpolated_weight_a(start + elapsed_slots);
+
+        let delta = (target - current) as u128;
+        let expected = current + ((delta * elapsed_slots as u128) / (end - start) as u128) as u32;
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn interpolated_weight_at_boundaries() {
+        let ps = pool_with_weight_transition(200_000, 800_000, 100, 200);
+        assert_eq!(ps.interpolated_weight_a(50), 200_000);
+        assert_eq!(ps.interpolated_weight_a(100), 200_000);
+        assert_eq!(ps.interpolated_weight_a(200), 800_000);
+        assert_eq!(ps.interpolated_weight_a(999), 800_000);
+        assert_eq!(ps.interpolated_weight_a(150), 500_000);
+    }
+
+    #[test]
+    fn interpolated_weight_decreasing() {
+        let ps = pool_with_weight_transition(800_000, 200_000, 0, 100);
+        assert_eq!(ps.interpolated_weight_a(0), 800_000);
+        assert_eq!(ps.interpolated_weight_a(50), 500_000);
+        assert_eq!(ps.interpolated_weight_a(100), 200_000);
+    }
+}

@@ -29,7 +29,7 @@ use crate::state::{load, load_mut, EtfState};
 ///
 /// Data: [amount: u64] — base amount per token (scaled by weight)
 pub fn process_deposit(
-    _program_id: &Pubkey,
+    program_id: &Pubkey,
     accounts: &[AccountInfo],
     amount: u64,
     name: &[u8],
@@ -48,8 +48,13 @@ pub fn process_deposit(
         return Err(ProgramError::MissingRequiredSignature);
     }
 
+    // Program ownership: etf_state must be owned by this program
+    if etf_state_ai.owner() != program_id {
+        return Err(VaultError::InvalidProgramOwner.into());
+    }
+
     // Load ETF state
-    let (tc, total_supply, authority, weights, bump_seed) = {
+    let (tc, total_supply, authority, weights, bump_seed, etf_mint, token_vaults) = {
         let data = etf_state_ai.try_borrow_data()?;
         let etf = unsafe { load::<EtfState>(&data) }
             .ok_or(ProgramError::InvalidAccountData)?;
@@ -57,7 +62,7 @@ pub fn process_deposit(
             return Err(VaultError::InvalidDiscriminator.into());
         }
         if etf.paused != 0 {
-            return Err(VaultError::InvalidDiscriminator.into());
+            return Err(VaultError::PoolPaused.into());
         }
         (
             etf.token_count as usize,
@@ -65,11 +70,26 @@ pub fn process_deposit(
             etf.authority,
             etf.weights_bps,
             etf.bump,
+            etf.etf_mint,
+            etf.token_vaults,
         )
     };
 
+    // Validate etf_mint against stored state
+    if etf_mint_ai.key() != &etf_mint {
+        return Err(VaultError::MintMismatch.into());
+    }
+
     if accounts.len() < 5 + tc * 2 {
         return Err(ProgramError::NotEnoughAccountKeys);
+    }
+
+    // Validate each vault against stored state (positions 5+tc..5+2*tc)
+    for i in 0..tc {
+        let vault = &accounts[5 + tc + i];
+        if vault.key() != &token_vaults[i] {
+            return Err(VaultError::VaultMismatch.into());
+        }
     }
 
     let mut token_amounts = [0u64; 5];

@@ -45,18 +45,47 @@ pub fn process_withdraw(
         return Err(ProgramError::MissingRequiredSignature);
     }
 
-    let (tc, total_supply, authority, bump) = {
+    if etf_state_ai.owner() != program_id {
+        return Err(VaultError::InvalidProgramOwner.into());
+    }
+
+    let (tc, total_supply, authority, bump, etf_mint, token_vaults) = {
         let data = etf_state_ai.try_borrow_data()?;
         let etf = unsafe { load::<EtfState>(&data) }
             .ok_or(ProgramError::InvalidAccountData)?;
         if !etf.is_initialized() {
             return Err(VaultError::InvalidDiscriminator.into());
         }
+        if etf.paused != 0 {
+            return Err(VaultError::PoolPaused.into());
+        }
         if etf.total_supply == 0 {
             return Err(VaultError::DivisionByZero.into());
         }
-        (etf.token_count as usize, etf.total_supply, etf.authority, etf.bump)
+        (
+            etf.token_count as usize,
+            etf.total_supply,
+            etf.authority,
+            etf.bump,
+            etf.etf_mint,
+            etf.token_vaults,
+        )
     };
+
+    if etf_mint_ai.key() != &etf_mint {
+        return Err(VaultError::MintMismatch.into());
+    }
+
+    if accounts.len() < 5 + tc * 2 {
+        return Err(ProgramError::NotEnoughAccountKeys);
+    }
+
+    for i in 0..tc {
+        let vault = &accounts[5 + i];
+        if vault.key() != &token_vaults[i] {
+            return Err(VaultError::VaultMismatch.into());
+        }
+    }
 
     if burn_amount > total_supply {
         return Err(VaultError::InsufficientBalance.into());

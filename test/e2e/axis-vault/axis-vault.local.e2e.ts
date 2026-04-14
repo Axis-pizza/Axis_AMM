@@ -329,6 +329,117 @@ async function main() {
     }
   }
 
+  // 11. Test: Deposit with wrong etf_mint → MintMismatch (9009 / 0x2331)
+  console.log("\n> Test: Deposit with wrong etf_mint (expect MintMismatch)");
+  try {
+    const fakeMint = await createMint(conn, payer, payer.publicKey, null, 6);
+    const badDepositData = Buffer.concat([
+      Buffer.from([1]),
+      u64Le(100_000_000n),
+      Buffer.from([nameBytes.length]),
+      nameBytes,
+    ]);
+    await sendAndConfirmTransaction(conn, new Transaction().add(new TransactionInstruction({
+      programId: PROGRAM_ID,
+      keys: [
+        { pubkey: payer.publicKey, isSigner: true, isWritable: true },
+        { pubkey: etfState, isSigner: false, isWritable: true },
+        { pubkey: fakeMint, isSigner: false, isWritable: true }, // WRONG mint
+        { pubkey: userEtfAta, isSigner: false, isWritable: true },
+        { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+        ...userTokens.map(u => ({ pubkey: u, isSigner: false, isWritable: true })),
+        ...vaults.map(v => ({ pubkey: v, isSigner: false, isWritable: true })),
+      ],
+      data: badDepositData,
+    })), [payer]);
+    throw new Error("Should have failed but succeeded");
+  } catch (err: any) {
+    const msg = err.message || String(err);
+    // MintMismatch = 9009 = 0x2331
+    if (msg.includes("0x2331") || msg.includes("9009")) {
+      console.log("  Correctly rejected with MintMismatch:", msg.match(/0x[0-9a-f]+/i)?.[0] ?? "9009");
+    } else if (msg === "Should have failed but succeeded") {
+      throw new Error("Deposit with wrong etf_mint should have failed");
+    } else {
+      console.log("  Rejected with error (unexpected code):", msg.slice(0, 120));
+    }
+  }
+
+  // 12. Test: Deposit with wrong vault → VaultMismatch (9013 / 0x2335)
+  console.log("\n> Test: Deposit with wrong vault account (expect VaultMismatch)");
+  try {
+    // Create a vault-like token account owned by payer (not the EtfState PDA) for mint[0]
+    const fakeVault = await createAccount(conn, payer, mints[0], payer.publicKey);
+    const wrongVaults = [fakeVault, vaults[1], vaults[2]];
+    const badDepositData = Buffer.concat([
+      Buffer.from([1]),
+      u64Le(100_000_000n),
+      Buffer.from([nameBytes.length]),
+      nameBytes,
+    ]);
+    await sendAndConfirmTransaction(conn, new Transaction().add(new TransactionInstruction({
+      programId: PROGRAM_ID,
+      keys: [
+        { pubkey: payer.publicKey, isSigner: true, isWritable: true },
+        { pubkey: etfState, isSigner: false, isWritable: true },
+        { pubkey: etfMintKp.publicKey, isSigner: false, isWritable: true },
+        { pubkey: userEtfAta, isSigner: false, isWritable: true },
+        { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+        ...userTokens.map(u => ({ pubkey: u, isSigner: false, isWritable: true })),
+        ...wrongVaults.map(v => ({ pubkey: v, isSigner: false, isWritable: true })),
+      ],
+      data: badDepositData,
+    })), [payer]);
+    throw new Error("Should have failed but succeeded");
+  } catch (err: any) {
+    const msg = err.message || String(err);
+    // VaultMismatch = 9013 = 0x2335
+    if (msg.includes("0x2335") || msg.includes("9013")) {
+      console.log("  Correctly rejected with VaultMismatch:", msg.match(/0x[0-9a-f]+/i)?.[0] ?? "9013");
+    } else if (msg === "Should have failed but succeeded") {
+      throw new Error("Deposit with wrong vault should have failed");
+    } else {
+      console.log("  Rejected with error (unexpected code):", msg.slice(0, 120));
+    }
+  }
+
+  // 13. Test: Withdraw with fake etf_state (wrong program owner) → InvalidProgramOwner (9014 / 0x2336)
+  console.log("\n> Test: Withdraw with non-program-owned etf_state (expect InvalidProgramOwner)");
+  try {
+    // Any account not owned by the vault program — use the ETF mint account (owned by token program)
+    const fakeState = etfMintKp.publicKey;
+    const badWithdrawData = Buffer.concat([
+      Buffer.from([2]),
+      u64Le(1_000n),
+      Buffer.from([nameBytes.length]),
+      nameBytes,
+    ]);
+    await sendAndConfirmTransaction(conn, new Transaction().add(new TransactionInstruction({
+      programId: PROGRAM_ID,
+      keys: [
+        { pubkey: payer.publicKey, isSigner: true, isWritable: true },
+        { pubkey: fakeState, isSigner: false, isWritable: true }, // WRONG: not program-owned
+        { pubkey: etfMintKp.publicKey, isSigner: false, isWritable: true },
+        { pubkey: userEtfAta, isSigner: false, isWritable: true },
+        { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+        ...vaults.map(v => ({ pubkey: v, isSigner: false, isWritable: true })),
+        ...userTokens.map(u => ({ pubkey: u, isSigner: false, isWritable: true })),
+      ],
+      data: badWithdrawData,
+    })), [payer]);
+    throw new Error("Should have failed but succeeded");
+  } catch (err: any) {
+    const msg = err.message || String(err);
+    // InvalidProgramOwner = 9014 = 0x2336
+    if (msg.includes("0x2336") || msg.includes("9014")) {
+      console.log("  Correctly rejected with InvalidProgramOwner:", msg.match(/0x[0-9a-f]+/i)?.[0] ?? "9014");
+    } else if (msg === "Should have failed but succeeded") {
+      throw new Error("Withdraw with non-program-owned etf_state should have failed");
+    } else {
+      console.log("  Rejected with error (unexpected code):", msg.slice(0, 120));
+    }
+  }
+
   console.log("\n=== Vault E2E PASSED ===");
 }
 main().catch(err => { console.error("Error:", err.message || err); process.exit(1); });

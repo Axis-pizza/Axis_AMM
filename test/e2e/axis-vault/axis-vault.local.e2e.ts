@@ -291,6 +291,44 @@ async function main() {
     }
   }
 
+  // 10. Test: Withdraw more than total_supply → Overflow / InsufficientBalance error
+  console.log("\n> Test: Withdraw exceeding total_supply (expect error)");
+  try {
+    const hugeAmount = 999_999_999_999_999n;
+    const badWithdrawData = Buffer.concat([
+      Buffer.from([2]),
+      u64Le(hugeAmount),
+      Buffer.from([nameBytes.length]),
+      nameBytes,
+    ]);
+
+    await sendAndConfirmTransaction(conn, new Transaction().add(new TransactionInstruction({
+      programId: PROGRAM_ID,
+      keys: [
+        { pubkey: payer.publicKey, isSigner: true, isWritable: true },
+        { pubkey: etfState, isSigner: false, isWritable: true },
+        { pubkey: etfMintKp.publicKey, isSigner: false, isWritable: true },
+        { pubkey: userEtfAta, isSigner: false, isWritable: true },
+        { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+        ...vaults.map(v => ({ pubkey: v, isSigner: false, isWritable: true })),
+        ...userTokens.map(u => ({ pubkey: u, isSigner: false, isWritable: true })),
+      ],
+      data: badWithdrawData,
+    })), [payer]);
+    throw new Error("Should have failed but succeeded");
+  } catch (err: any) {
+    const msg = err.message || String(err);
+    // Accept Overflow (9007 / 0x232F) or InsufficientBalance (9005 / 0x232D)
+    if (msg.includes("0x232f") || msg.includes("0x232d") || msg.includes("9007") || msg.includes("9005")) {
+      console.log("  Correctly rejected with error:", msg.match(/0x[0-9a-f]+/i)?.[0] ?? "overflow/insufficient");
+    } else if (msg === "Should have failed but succeeded") {
+      throw new Error("Withdraw with huge amount should have failed but succeeded");
+    } else {
+      // Any other program error is acceptable — the point is it must not succeed
+      console.log("  Rejected with error (unexpected code):", msg.slice(0, 120));
+    }
+  }
+
   console.log("\n=== Vault E2E PASSED ===");
 }
 main().catch(err => { console.error("Error:", err.message || err); process.exit(1); });

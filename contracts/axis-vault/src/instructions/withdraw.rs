@@ -113,7 +113,7 @@ pub fn process_withdraw(
         }
     }
 
-    // Update total supply
+    // Update total supply (checked_sub prevents underflow to u64::MAX)
     {
         let mut data = etf_state_ai.try_borrow_mut_data()?;
         let etf = unsafe { load_mut::<EtfState>(&mut data) }

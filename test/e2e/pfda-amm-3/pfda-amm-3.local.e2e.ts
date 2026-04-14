@@ -330,22 +330,27 @@ async function main() {
   console.log(`  Token 1 received: ${(afterBal - beforeBal).toLocaleString()}`);
 
   // ═══════════════════════════════════════════════════════════════════
-  // Step 10: Oracle Ownership Validation (Issue #7)
+  // Step 10: Oracle Validation — Owner + Discriminator (Issues #7, #14)
   //
   // After the normal batch 0 cycle, the pool is now on batch_id=1.
   // We submit a new swap into batch 1, wait for its window to end,
   // then attempt ClearBatch with 3 fake oracle accounts (random keypairs).
   //
-  // The oracle reader (oracle.rs) calls verify_switchboard_owner() which
-  // checks that the feed account is owned by the Switchboard V3 program.
-  // Random keypairs are owned by SystemProgram, so the ownership check
-  // fails and oracle prices gracefully fall back to None (reserve-only
-  // pricing). The ClearBatch itself should still succeed — the oracle
-  // check is defensive, not fatal.
+  // The oracle reader (oracle.rs) applies TWO checks for each feed account:
+  //   1. verify_switchboard_owner() — account owned by Switchboard V3 program
+  //   2. discriminator check — first 8 bytes match
+  //      sha256("account:PullFeedAccountData")[0..8] =
+  //      [0xc4, 0x1b, 0x6c, 0xc4, 0x0a, 0xd7, 0xdb, 0x28]
   //
-  // Error code reference: OracleOwnerMismatch = 8028 (0x1F5C)
+  // Random keypairs fail BOTH (owned by SystemProgram, no discriminator).
+  // Either failure triggers graceful fallback: oracle_prices = None,
+  // reserve-only pricing, ClearBatch still succeeds.
+  //
+  // Error code references:
+  //   OracleOwnerMismatch = 8028 (0x1F5C)
+  //   OracleInvalid       = 8020 (0x1F54)  // discriminator failure
   // ═══════════════════════════════════════════════════════════════════
-  console.log("\n▶ Step 10: Oracle Ownership Validation (Issue #7 — OracleOwnerMismatch)");
+  console.log("\n▶ Step 10: Oracle Validation (Issues #7 + #14 — owner + discriminator)");
 
   // 10a. SwapRequest into batch 1
   const [ticket1] = findTicket(pool, payer.publicKey, 1n);
@@ -364,7 +369,10 @@ async function main() {
   console.log(`  Batch 1 window ends: slot ${windowEnd2}`);
   await waitForSlot(conn, windowEnd2);
 
-  // 10c. ClearBatch with 3 fake oracle accounts (random keypairs — owned by SystemProgram)
+  // 10c. ClearBatch with fake oracle accounts at positions 6,7,8.
+  // These are owned by SystemProgram and have no valid PullFeedAccountData
+  // discriminator — both checks in oracle.rs reject them, causing graceful
+  // fallback to reserve-only pricing.
   const fakeOracle0 = Keypair.generate();
   const fakeOracle1 = Keypair.generate();
   const fakeOracle2 = Keypair.generate();
@@ -382,7 +390,7 @@ async function main() {
       { pubkey: history1, isSigner: false, isWritable: true },
       { pubkey: queue2, isSigner: false, isWritable: true },
       { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-      // Fake oracle feeds — not owned by Switchboard
+      // Fake oracle feeds — wrong owner AND wrong discriminator
       { pubkey: fakeOracle0.publicKey, isSigner: false, isWritable: false },
       { pubkey: fakeOracle1.publicKey, isSigner: false, isWritable: false },
       { pubkey: fakeOracle2.publicKey, isSigner: false, isWritable: false },
@@ -390,8 +398,8 @@ async function main() {
     data: Buffer.from([2]),  // disc=2, no bid
   });
 
-  // The ClearBatch should succeed — oracle ownership mismatch causes graceful
-  // fallback to reserve-only pricing (oracle_prices = None), not a hard failure.
+  // The ClearBatch should succeed — oracle owner / discriminator failures
+  // cause graceful fallback to reserve-only pricing (oracle_prices = None).
   const clearOracleSig = await sendAndConfirmTransaction(conn,
     new Transaction().add(clearWithFakeOraclesIx),
     [payer]
@@ -415,7 +423,7 @@ async function main() {
   } else {
     console.log("  (return_data not available in tx metadata — skipping oracle_used check)");
   }
-  console.log("  PASSED: OracleOwnerMismatch triggers graceful fallback, not crash");
+  console.log("  PASSED: Owner + discriminator checks reject fake feeds, oracle_used=0");
 
   // ═══════════════════════════════════════════════════════════════════
   // Step 11: BidExcessive Validation (Issue #8)

@@ -41,6 +41,9 @@ pub fn process_claim(program_id: &Pubkey, accounts: &[AccountInfo]) -> ProgramRe
         if !pool.is_initialized() {
             return Err(PfmmError::InvalidDiscriminator.into());
         }
+        if pool.paused != 0 {
+            return Err(PfmmError::PoolPaused.into());
+        }
         let (expected, bump) = pubkey::find_program_address(
             &[b"pool", &pool.token_a_mint, &pool.token_b_mint],
             program_id,

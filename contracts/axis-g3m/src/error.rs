@@ -45,6 +45,8 @@ pub enum G3mError {
     ReserveChangeExceeded = 7019,
     /// Caller is not the pool authority
     Unauthorized = 7020,
+    /// CPI target is not the Jupiter V6 program
+    InvalidProgram = 7021,
 }
 
 impl From<G3mError> for ProgramError {

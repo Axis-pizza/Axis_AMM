@@ -7,7 +7,7 @@ use pinocchio::{
 };
 
 use crate::error::G3mError;
-use crate::jupiter::read_vault_balance;
+use crate::jupiter::{read_vault_balance, verify_jupiter_program};
 use crate::math::compute_invariant;
 use crate::state::G3mPoolState;
 
@@ -147,6 +147,12 @@ pub fn process_rebalance(
         }
     } else {
         return Err(G3mError::InvalidTokenCount.into());
+    }
+
+    // If a Jupiter program account is provided, validate it
+    let jupiter_account_idx = 2 + tc;
+    if accounts.len() > jupiter_account_idx {
+        verify_jupiter_program(&accounts[jupiter_account_idx])?;
     }
 
     drop(pool_data);

@@ -127,7 +127,8 @@ pub fn process_initialize_pool(
             authority: *payer.key(),
             bump: pool_bump,
             reentrancy_guard: 0,
-            _padding: [0; 2],
+            paused: 0,
+            _padding: [0; 1],
         };
     }
 

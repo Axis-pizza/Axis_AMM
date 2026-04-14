@@ -84,6 +84,9 @@ const RESULT_NUM_SAMPLES_OFFSET: usize = 1336;
 /// Minimum account size for a valid Switchboard feed
 const MIN_FEED_ACCOUNT_SIZE: usize = 1360;
 
+/// Anchor discriminator for PullFeedAccountData: sha256("account:PullFeedAccountData")[0..8]
+const PULL_FEED_DISCRIMINATOR: [u8; 8] = [0xc4, 0x1b, 0x6c, 0xc4, 0x0a, 0xd7, 0xdb, 0x28];
+
 /// Switchboard prices are scaled by 10^18
 const SWITCHBOARD_PRECISION: u128 = 1_000_000_000_000_000_000;
 
@@ -108,6 +111,11 @@ pub fn read_switchboard_price(
 
     // Validate account size
     if data.len() < MIN_FEED_ACCOUNT_SIZE {
+        return Err(PfmmError::InvalidDiscriminator.into());
+    }
+
+    // Validate Anchor discriminator
+    if data[0..8] != PULL_FEED_DISCRIMINATOR {
         return Err(PfmmError::InvalidDiscriminator.into());
     }
 

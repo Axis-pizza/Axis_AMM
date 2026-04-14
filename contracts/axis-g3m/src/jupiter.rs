@@ -21,6 +21,14 @@ use crate::error::G3mError;
 use crate::math::compute_invariant;
 use crate::state::G3mPoolState;
 
+/// Validate that a program account is the Jupiter V6 program.
+pub fn verify_jupiter_program(program_account: &AccountInfo) -> Result<(), ProgramError> {
+    if program_account.key().as_ref() != &JUPITER_PROGRAM_ID {
+        return Err(G3mError::InvalidProgram.into());
+    }
+    Ok(())
+}
+
 /// Jupiter V6 program ID bytes
 pub const JUPITER_PROGRAM_ID: [u8; 32] = [
     0x04, 0x58, 0x99, 0x26, 0x88, 0x1e, 0xd7, 0x10,

@@ -37,6 +37,7 @@ enum Instruction {
     Claim = 3,
     AddLiquidity = 4,
     UpdateWeight = 5,
+    SetPaused = 6,
 }
 
 impl Instruction {
@@ -48,6 +49,7 @@ impl Instruction {
             3 => Some(Instruction::Claim),
             4 => Some(Instruction::AddLiquidity),
             5 => Some(Instruction::UpdateWeight),
+            6 => Some(Instruction::SetPaused),
             _ => None,
         }
     }
@@ -155,6 +157,14 @@ pub fn process_instruction(
                 data[4], data[5], data[6], data[7], data[8], data[9], data[10], data[11],
             ]);
             instructions::process_update_weight(program_id, accounts, target_weight_a, weight_end_slot)
+        }
+
+        Instruction::SetPaused => {
+            if data.is_empty() {
+                return Err(ProgramError::InvalidInstructionData);
+            }
+            let paused = data[0] != 0;
+            instructions::process_set_paused(program_id, accounts, paused)
         }
     }
 }

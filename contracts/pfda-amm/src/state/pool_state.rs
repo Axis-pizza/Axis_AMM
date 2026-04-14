@@ -1,4 +1,4 @@
-/// PoolState - 240 bytes, repr(C)
+/// PoolState - 244 bytes, repr(C)
 ///
 /// PDA seeds: [b"pool", token_a_mint, token_b_mint]
 #[repr(C)]
@@ -36,14 +36,16 @@ pub struct PoolState {
     pub base_fee_bps: u16,
     /// Fee discount for searchers in basis points
     pub fee_discount_bps: u16,
-    /// Pool authority (creator, can update weights)
+    /// Pool authority (creator, can pause/update weights)
     pub authority: [u8; 32],
     /// PDA bump seed
     pub bump: u8,
     /// Reentrancy guard: 0 = open, 1 = locked
     pub reentrancy_guard: u8,
+    /// Paused flag (1 = paused, 0 = active)
+    pub paused: u8,
     /// Alignment padding
-    pub _padding: [u8; 2],
+    pub _padding: [u8; 1],
 }
 
 impl PoolState {

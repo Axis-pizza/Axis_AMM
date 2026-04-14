@@ -469,6 +469,66 @@ async function main() {
   }
   console.log();
 
+  // ── 11. Rebalance with wrong Jupiter program → InvalidProgram ───────────
+  console.log("▶ Step 11: Rebalance with wrong Jupiter program → expect InvalidProgram (7021)");
+
+  // First, induce drift again with another big swap so needs_rebalance() passes
+  console.log("  Re-inducing drift with a large swap...");
+  const driftSwap = new Transaction().add(
+    ixSwap(payer.publicKey, poolState,
+      userAccounts[0], userAccounts[2],
+      vaultAccounts[0], vaultAccounts[2],
+      0, 2,
+      BIG_SWAP, 0n,
+    )
+  );
+  await sendAndConfirmTransaction(conn, driftSwap, [payer]);
+
+  // Now build a Rebalance with a fake Jupiter program account
+  const poolForJupTest = await readPoolState(conn, poolState);
+  const totalRes2 = poolForJupTest.reserves.reduce((a, b) => a + b, 0n);
+  const avgRes2 = totalRes2 / BigInt(TOKEN_COUNT);
+  const jupTargetReserves = Array(TOKEN_COUNT).fill(avgRes2);
+
+  const fakeJupiter = Keypair.generate().publicKey;
+  const rebalWithJupIx = (() => {
+    const reservesBuf = Buffer.alloc(jupTargetReserves.length * 8);
+    for (let i = 0; i < jupTargetReserves.length; i++) {
+      reservesBuf.writeBigUInt64LE(jupTargetReserves[i], i * 8);
+    }
+    const data = Buffer.concat([Buffer.from([3]), reservesBuf]);
+
+    return new TransactionInstruction({
+      programId: PROGRAM_ID,
+      keys: [
+        { pubkey: payer.publicKey, isSigner: true,  isWritable: false },
+        { pubkey: poolState,       isSigner: false, isWritable: true  },
+        // Vault accounts at positions 2..2+TOKEN_COUNT
+        ...vaultAccounts.map(pk => ({ pubkey: pk, isSigner: false, isWritable: false })),
+        // Fake Jupiter program at position 2 + TOKEN_COUNT
+        { pubkey: fakeJupiter,     isSigner: false, isWritable: false },
+      ],
+      data,
+    });
+  })();
+
+  const jupTestTx = new Transaction().add(rebalWithJupIx);
+  try {
+    await sendAndConfirmTransaction(conn, jupTestTx, [payer]);
+    console.log("  ✗ FAIL — transaction should have been rejected");
+    process.exit(1);
+  } catch (err: any) {
+    const msg = err?.message ?? String(err);
+    const hexCode = (7021).toString(16); // 0x1b6d
+    if (msg.includes("0x" + hexCode) || msg.includes("0x" + hexCode.toUpperCase())) {
+      console.log(`  ✓ Correctly rejected with InvalidProgram (0x${hexCode})`);
+    } else {
+      console.log(`  ✗ FAIL — unexpected error: ${msg}`);
+      process.exit(1);
+    }
+  }
+  console.log();
+
   // ── Summary ──────────────────────────────────────────────────────────────
   console.log("╔══════════════════════════════════════════════╗");
   console.log("║              CU Summary                      ║");

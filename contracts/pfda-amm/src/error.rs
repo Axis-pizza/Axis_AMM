@@ -39,6 +39,8 @@ pub enum PfmmError {
     Unauthorized = 6016,
     /// Oracle feed account not owned by Switchboard program
     OracleOwnerMismatch = 6017,
+    /// Pool is paused
+    PoolPaused = 6018,
 }
 
 impl From<PfmmError> for ProgramError {

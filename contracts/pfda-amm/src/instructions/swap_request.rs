@@ -58,6 +58,9 @@ pub fn process_swap_request(
         if pool.reentrancy_guard != 0 {
             return Err(PfmmError::ReentrancyDetected.into());
         }
+        if pool.paused != 0 {
+            return Err(PfmmError::PoolPaused.into());
+        }
 
         // Verify this is a valid pool PDA
         let (expected_pool, _bump) = pubkey::find_program_address(

@@ -80,6 +80,9 @@ pub fn process_clear_batch(program_id: &Pubkey, accounts: &[AccountInfo], bid_la
         if pool.reentrancy_guard != 0 {
             return Err(PfmmError::ReentrancyDetected.into());
         }
+        if pool.paused != 0 {
+            return Err(PfmmError::PoolPaused.into());
+        }
         let (expected, _bump) = pubkey::find_program_address(
             &[b"pool", &pool.token_a_mint, &pool.token_b_mint],
             program_id,

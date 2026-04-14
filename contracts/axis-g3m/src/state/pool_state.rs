@@ -48,6 +48,8 @@ pub struct G3mPoolState {
     pub fee_rate_bps: u16,
     /// Drift threshold in basis points (e.g., 500 = 5%)
     pub drift_threshold_bps: u16,
+    /// Max invariant drift allowed after rebalance, in bps (e.g., 50 = 0.5%)
+    pub max_invariant_drift_bps: u16,
     /// Slot of last rebalance execution
     pub last_rebalance_slot: u64,
     /// Minimum slots between rebalances (cooldown)
@@ -57,7 +59,7 @@ pub struct G3mPoolState {
     /// PDA bump seed
     pub bump: u8,
     /// Alignment padding
-    pub _padding: [u8; 6],
+    pub _padding: [u8; 4],
 }
 
 impl G3mPoolState {
@@ -141,3 +143,75 @@ impl G3mPoolState {
 // Compile-time size assertion: 8+32+1+160+160+10+40+8+8+2+2+8+8+1+1+6 = 455
 // But repr(C) may add padding after token_count (u8). Let's be flexible.
 const _: () = assert!(core::mem::size_of::<G3mPoolState>() > 0);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Helper: create a zeroed G3mPoolState and set its discriminator.
+    fn new_pool() -> G3mPoolState {
+        let mut pool: G3mPoolState = unsafe { core::mem::zeroed() };
+        pool.discriminator = G3mPoolState::DISCRIMINATOR;
+        pool
+    }
+
+    #[test]
+    fn max_invariant_drift_bps_field_exists_and_zeroed_by_default() {
+        let pool = new_pool();
+        // A freshly zeroed struct should have max_invariant_drift_bps = 0.
+        // The initialize_pool instruction sets it to 50 (0.5%) at runtime.
+        assert_eq!(pool.max_invariant_drift_bps, 0);
+    }
+
+    #[test]
+    fn max_invariant_drift_bps_round_trips() {
+        let mut pool = new_pool();
+        pool.max_invariant_drift_bps = 50; // 0.5% — the initialize_pool default
+        assert_eq!(pool.max_invariant_drift_bps, 50);
+
+        pool.max_invariant_drift_bps = 200; // 2%
+        assert_eq!(pool.max_invariant_drift_bps, 200);
+    }
+
+    #[test]
+    fn max_invariant_drift_bps_offset_in_struct() {
+        // Verify the field is at a consistent byte offset by round-tripping
+        // through raw bytes (important because the struct is repr(C) and
+        // read directly from on-chain account data).
+        let mut pool = new_pool();
+        pool.max_invariant_drift_bps = 0xABCD;
+
+        let _bytes: &[u8] = unsafe {
+            core::slice::from_raw_parts(
+                &pool as *const G3mPoolState as *const u8,
+                core::mem::size_of::<G3mPoolState>(),
+            )
+        };
+
+        // Find 0xABCD (LE: 0xCD, 0xAB) in the byte representation.
+        // It must appear exactly once and at the expected offset relative
+        // to drift_threshold_bps (which is 2 bytes before it).
+        pool.drift_threshold_bps = 0x1234;
+        let bytes2: &[u8] = unsafe {
+            core::slice::from_raw_parts(
+                &pool as *const G3mPoolState as *const u8,
+                core::mem::size_of::<G3mPoolState>(),
+            )
+        };
+
+        // Find drift_threshold_bps offset
+        let dt_off = bytes2
+            .windows(2)
+            .position(|w| w == [0x34, 0x12])
+            .expect("drift_threshold_bps not found in bytes");
+
+        // max_invariant_drift_bps should follow immediately after (or after alignment padding)
+        let mid_off = bytes2
+            .windows(2)
+            .position(|w| w == [0xCD, 0xAB])
+            .expect("max_invariant_drift_bps not found in bytes");
+
+        // In the repr(C) layout, max_invariant_drift_bps comes right after drift_threshold_bps (both u16)
+        assert_eq!(mid_off, dt_off + 2, "max_invariant_drift_bps should be 2 bytes after drift_threshold_bps");
+    }
+}

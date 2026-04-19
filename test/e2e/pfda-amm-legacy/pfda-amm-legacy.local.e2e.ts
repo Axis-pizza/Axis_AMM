@@ -623,6 +623,36 @@ async function main() {
   }
   console.log();
 
+  // ── 14. CloseExpiredTicket — should fail (BatchWindowNotEnded) ─────────
+  console.log("▶ Step 14: CloseExpiredTicket (expect BatchWindowNotEnded)");
+  try {
+    const closeExpiredTicketIx = new TransactionInstruction({
+      programId: PROGRAM_ID,
+      keys: [
+        { pubkey: payer.publicKey, isSigner: true, isWritable: false },
+        { pubkey: poolState, isSigner: false, isWritable: false },
+        { pubkey: ticket, isSigner: false, isWritable: true },
+        { pubkey: payer.publicKey, isSigner: false, isWritable: true },
+      ],
+      data: Buffer.from([8]),
+    });
+    await sendAndConfirmTransaction(conn,
+      new Transaction().add(closeExpiredTicketIx), [payer]
+    );
+    throw new Error("CloseExpiredTicket should have failed but succeeded");
+  } catch (err: any) {
+    const msg = err.message ?? String(err);
+    if (msg.includes("0x1772") || msg.includes("6002") || msg.includes("BatchWindowNotEnded")) {
+      console.log("  Correctly rejected: BatchWindowNotEnded (0x1772 / 6002)");
+    } else if (msg.includes("should have failed")) {
+      throw err;
+    } else {
+      console.log(`  Rejected with error: ${msg.slice(0, 120)}`);
+      console.log("  (Expected BatchWindowNotEnded — TICKET_EXPIRY_BATCHES not reached)");
+    }
+  }
+  console.log();
+
   // ── サマリー ──────────────────────────────────────────────────────────
   console.log("╔══════════════════════════════════════════╗");
   console.log("║             CU サマリー                  ║");

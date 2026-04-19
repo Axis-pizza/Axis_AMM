@@ -177,6 +177,23 @@ async function main() {
     console.log(`  Vault ${i} balance: ${vaultBal.toLocaleString()}`);
   }
 
+  // Fee assertion: first deposit is 1_000_000_000 base; fee_bps=30 (0.3%)
+  // so treasury should hold 3_000_000 ETF tokens and user ETF balance
+  // should be exactly 997_000_000 (net of fee). Asserting both proves the
+  // fee actually moved to treasury rather than being silently destroyed.
+  {
+    const treasuryBal = (await getAccount(conn, treasuryEtfAta)).amount;
+    const expectedFee = 3_000_000n;
+    const expectedNet = 997_000_000n;
+    if (treasuryBal !== expectedFee) {
+      throw new Error(`Deposit fee mismatch: treasury=${treasuryBal}, expected=${expectedFee}`);
+    }
+    if (etfBalance !== expectedNet) {
+      throw new Error(`Net mint mismatch: user=${etfBalance}, expected=${expectedNet}`);
+    }
+    console.log(`  Treasury fee received: ${treasuryBal} (30 bps of 1_000_000_000)`);
+  }
+
   // 8. Withdraw — burn half the ETF tokens
   const burnAmount = etfBalance / 2n;
   console.log(`\n> Withdraw (burn ${burnAmount} ETF tokens)`);
@@ -218,6 +235,20 @@ async function main() {
     const after = (await getAccount(conn, userTokens[i])).amount;
     const received = after - beforeBalances[i];
     console.log(`  Token ${i} received back: ${received.toLocaleString()}`);
+  }
+
+  // Withdraw fee assertion: burn_amount was etfBalance/2 = 498_500_000;
+  // fee_bps=30 → fee = 1_495_500. Treasury already had 3_000_000 from the
+  // Deposit fee, so its balance should now be 3_000_000 + 1_495_500 =
+  // 4_495_500. Asserting the delta proves the withdraw fee transfer
+  // actually hit the treasury (and wasn't silently burned).
+  {
+    const treasuryBalAfter = (await getAccount(conn, treasuryEtfAta)).amount;
+    const expected = 4_495_500n;
+    if (treasuryBalAfter !== expected) {
+      throw new Error(`Withdraw fee mismatch: treasury=${treasuryBalAfter}, expected=${expected}`);
+    }
+    console.log(`  Treasury total after withdraw fee: ${treasuryBalAfter}`);
   }
 
   // 9. Test: CreateEtf with duplicate mints → DuplicateMint error (9011 / 0x2333)
@@ -309,6 +340,7 @@ async function main() {
     const badWithdrawData = Buffer.concat([
       Buffer.from([2]),
       u64Le(hugeAmount),
+      u64Le(0n),
       Buffer.from([nameBytes.length]),
       nameBytes,
     ]);
@@ -337,6 +369,568 @@ async function main() {
       throw new Error("Withdraw with huge amount should have failed but succeeded");
     } else {
       // Any other program error is acceptable — the point is it must not succeed
+      console.log("  Rejected with error (unexpected code):", msg.slice(0, 120));
+    }
+  }
+
+  // 11. Test: Deposit with wrong etf_mint → MintMismatch (9009 / 0x2331)
+  console.log("\n> Test: Deposit with wrong etf_mint (expect MintMismatch)");
+  try {
+    const fakeMint = await createMint(conn, payer, payer.publicKey, null, 6);
+    const badDepositData = Buffer.concat([
+      Buffer.from([1]),
+      u64Le(100_000_000n),
+      u64Le(0n),
+      Buffer.from([nameBytes.length]),
+      nameBytes,
+    ]);
+    await sendAndConfirmTransaction(conn, new Transaction().add(new TransactionInstruction({
+      programId: PROGRAM_ID,
+      keys: [
+        { pubkey: payer.publicKey, isSigner: true, isWritable: true },
+        { pubkey: etfState, isSigner: false, isWritable: true },
+        { pubkey: fakeMint, isSigner: false, isWritable: true }, // WRONG mint
+        { pubkey: userEtfAta, isSigner: false, isWritable: true },
+        { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+        { pubkey: treasuryEtfAta, isSigner: false, isWritable: true },
+        ...userTokens.map(u => ({ pubkey: u, isSigner: false, isWritable: true })),
+        ...vaults.map(v => ({ pubkey: v, isSigner: false, isWritable: true })),
+      ],
+      data: badDepositData,
+    })), [payer]);
+    throw new Error("Should have failed but succeeded");
+  } catch (err: any) {
+    const msg = err.message || String(err);
+    // MintMismatch = 9009 = 0x2331
+    if (msg.includes("0x2331") || msg.includes("9009")) {
+      console.log("  Correctly rejected with MintMismatch:", msg.match(/0x[0-9a-f]+/i)?.[0] ?? "9009");
+    } else if (msg === "Should have failed but succeeded") {
+      throw new Error("Deposit with wrong etf_mint should have failed");
+    } else {
+      console.log("  Rejected with error (unexpected code):", msg.slice(0, 120));
+    }
+  }
+
+  // 12. Test: Deposit with wrong vault → VaultMismatch (9013 / 0x2335)
+  console.log("\n> Test: Deposit with wrong vault account (expect VaultMismatch)");
+  try {
+    // Create a vault-like token account owned by payer (not the EtfState PDA) for mint[0]
+    const fakeVault = await createAccount(conn, payer, mints[0], payer.publicKey);
+    const wrongVaults = [fakeVault, vaults[1], vaults[2]];
+    const badDepositData = Buffer.concat([
+      Buffer.from([1]),
+      u64Le(100_000_000n),
+      u64Le(0n),
+      Buffer.from([nameBytes.length]),
+      nameBytes,
+    ]);
+    await sendAndConfirmTransaction(conn, new Transaction().add(new TransactionInstruction({
+      programId: PROGRAM_ID,
+      keys: [
+        { pubkey: payer.publicKey, isSigner: true, isWritable: true },
+        { pubkey: etfState, isSigner: false, isWritable: true },
+        { pubkey: etfMintKp.publicKey, isSigner: false, isWritable: true },
+        { pubkey: userEtfAta, isSigner: false, isWritable: true },
+        { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+        { pubkey: treasuryEtfAta, isSigner: false, isWritable: true },
+        ...userTokens.map(u => ({ pubkey: u, isSigner: false, isWritable: true })),
+        ...wrongVaults.map(v => ({ pubkey: v, isSigner: false, isWritable: true })),
+      ],
+      data: badDepositData,
+    })), [payer]);
+    throw new Error("Should have failed but succeeded");
+  } catch (err: any) {
+    const msg = err.message || String(err);
+    // VaultMismatch = 9013 = 0x2335
+    if (msg.includes("0x2335") || msg.includes("9013")) {
+      console.log("  Correctly rejected with VaultMismatch:", msg.match(/0x[0-9a-f]+/i)?.[0] ?? "9013");
+    } else if (msg === "Should have failed but succeeded") {
+      throw new Error("Deposit with wrong vault should have failed");
+    } else {
+      console.log("  Rejected with error (unexpected code):", msg.slice(0, 120));
+    }
+  }
+
+  // 13. Test: Withdraw with fake etf_state (wrong program owner) → InvalidProgramOwner (9014 / 0x2336)
+  console.log("\n> Test: Withdraw with non-program-owned etf_state (expect InvalidProgramOwner)");
+  try {
+    // Any account not owned by the vault program — use the ETF mint account (owned by token program)
+    const fakeState = etfMintKp.publicKey;
+    const badWithdrawData = Buffer.concat([
+      Buffer.from([2]),
+      u64Le(1_000n),
+      u64Le(0n),
+      Buffer.from([nameBytes.length]),
+      nameBytes,
+    ]);
+    await sendAndConfirmTransaction(conn, new Transaction().add(new TransactionInstruction({
+      programId: PROGRAM_ID,
+      keys: [
+        { pubkey: payer.publicKey, isSigner: true, isWritable: true },
+        { pubkey: fakeState, isSigner: false, isWritable: true }, // WRONG: not program-owned
+        { pubkey: etfMintKp.publicKey, isSigner: false, isWritable: true },
+        { pubkey: userEtfAta, isSigner: false, isWritable: true },
+        { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+        { pubkey: treasuryEtfAta, isSigner: false, isWritable: true },
+        ...vaults.map(v => ({ pubkey: v, isSigner: false, isWritable: true })),
+        ...userTokens.map(u => ({ pubkey: u, isSigner: false, isWritable: true })),
+      ],
+      data: badWithdrawData,
+    })), [payer]);
+    throw new Error("Should have failed but succeeded");
+  } catch (err: any) {
+    const msg = err.message || String(err);
+    // InvalidProgramOwner = 9014 = 0x2336
+    if (msg.includes("0x2336") || msg.includes("9014")) {
+      console.log("  Correctly rejected with InvalidProgramOwner:", msg.match(/0x[0-9a-f]+/i)?.[0] ?? "9014");
+    } else if (msg === "Should have failed but succeeded") {
+      throw new Error("Withdraw with non-program-owned etf_state should have failed");
+    } else {
+      console.log("  Rejected with error (unexpected code):", msg.slice(0, 120));
+    }
+  }
+
+  // 14. Test: Second deposit (subsequent-depositor proportional-math path)
+  // After Step 7 the pool had total_supply>0; Step 8 halved it. A third
+  // deposit here must go through the `if total_supply != 0` branch and
+  // mint proportional to vault balances (not the base-amount first-deposit path).
+  console.log("\n> Test: Subsequent deposit hits proportional-math path");
+  {
+    const supplyBefore = (await getAccount(conn, userEtfAta)).amount;
+    const totalSupplyBefore = (await conn.getAccountInfo(etfState))!.data.readBigUInt64LE(408);
+    const secondDepositData = Buffer.concat([
+      Buffer.from([1]),
+      u64Le(500_000_000n),  // 500 tokens base
+      u64Le(0n),
+      Buffer.from([nameBytes.length]),
+      nameBytes,
+    ]);
+    await sendAndConfirmTransaction(conn, new Transaction().add(new TransactionInstruction({
+      programId: PROGRAM_ID,
+      keys: [
+        { pubkey: payer.publicKey, isSigner: true, isWritable: true },
+        { pubkey: etfState, isSigner: false, isWritable: true },
+        { pubkey: etfMintKp.publicKey, isSigner: false, isWritable: true },
+        { pubkey: userEtfAta, isSigner: false, isWritable: true },
+        { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+        { pubkey: treasuryEtfAta, isSigner: false, isWritable: true },
+        ...userTokens.map(u => ({ pubkey: u, isSigner: false, isWritable: true })),
+        ...vaults.map(v => ({ pubkey: v, isSigner: false, isWritable: true })),
+      ],
+      data: secondDepositData,
+    })), [payer]);
+    const supplyAfter = (await getAccount(conn, userEtfAta)).amount;
+    const totalSupplyAfter = (await conn.getAccountInfo(etfState))!.data.readBigUInt64LE(408);
+    const minted = supplyAfter - supplyBefore;
+    if (minted === 0n || totalSupplyAfter <= totalSupplyBefore) {
+      throw new Error(`Subsequent deposit didn't mint or total_supply didn't grow (minted=${minted}, before=${totalSupplyBefore}, after=${totalSupplyAfter})`);
+    }
+    console.log(`  Minted on 2nd deposit: ${minted}, total_supply: ${totalSupplyBefore} → ${totalSupplyAfter}`);
+    console.log("  Correctly routed through proportional path");
+  }
+
+  // 15. Test: Withdraw with wrong etf_mint → MintMismatch (9009 / 0x2331)
+  // Mirrors Test 11 on the Withdraw side. Must run while total_supply > 0,
+  // otherwise the DivisionByZero check in withdraw.rs fires first.
+  console.log("\n> Test: Withdraw with wrong etf_mint (expect MintMismatch)");
+  try {
+    const fakeMint = await createMint(conn, payer, payer.publicKey, null, 6);
+    const badWithdrawData = Buffer.concat([
+      Buffer.from([2]),
+      u64Le(1_000n),
+      u64Le(0n),
+      Buffer.from([nameBytes.length]),
+      nameBytes,
+    ]);
+    await sendAndConfirmTransaction(conn, new Transaction().add(new TransactionInstruction({
+      programId: PROGRAM_ID,
+      keys: [
+        { pubkey: payer.publicKey, isSigner: true, isWritable: true },
+        { pubkey: etfState, isSigner: false, isWritable: true },
+        { pubkey: fakeMint, isSigner: false, isWritable: true }, // WRONG mint
+        { pubkey: userEtfAta, isSigner: false, isWritable: true },
+        { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+        { pubkey: treasuryEtfAta, isSigner: false, isWritable: true },
+        ...vaults.map(v => ({ pubkey: v, isSigner: false, isWritable: true })),
+        ...userTokens.map(u => ({ pubkey: u, isSigner: false, isWritable: true })),
+      ],
+      data: badWithdrawData,
+    })), [payer]);
+    throw new Error("Should have failed but succeeded");
+  } catch (err: any) {
+    const msg = err.message || String(err);
+    // MintMismatch = 9009 = 0x2331
+    if (msg.includes("0x2331") || msg.includes("9009")) {
+      console.log("  Correctly rejected with MintMismatch:", msg.match(/0x[0-9a-f]+/i)?.[0] ?? "9009");
+    } else if (msg === "Should have failed but succeeded") {
+      throw new Error("Withdraw with wrong etf_mint should have failed");
+    } else {
+      console.log("  Rejected with error (unexpected code):", msg.slice(0, 120));
+    }
+  }
+
+  // 16. Test: Withdraw with wrong vault → VaultMismatch (9013 / 0x2335)
+  // Mirrors Test 12 on the Withdraw side. Withdraw's account layout puts
+  // vaults in [5..5+N] (opposite of Deposit), so swap the first vault here.
+  console.log("\n> Test: Withdraw with wrong vault account (expect VaultMismatch)");
+  try {
+    const fakeVault = await createAccount(conn, payer, mints[0], payer.publicKey);
+    const wrongVaults = [fakeVault, vaults[1], vaults[2]];
+    const badWithdrawData = Buffer.concat([
+      Buffer.from([2]),
+      u64Le(1_000n),
+      u64Le(0n),
+      Buffer.from([nameBytes.length]),
+      nameBytes,
+    ]);
+    await sendAndConfirmTransaction(conn, new Transaction().add(new TransactionInstruction({
+      programId: PROGRAM_ID,
+      keys: [
+        { pubkey: payer.publicKey, isSigner: true, isWritable: true },
+        { pubkey: etfState, isSigner: false, isWritable: true },
+        { pubkey: etfMintKp.publicKey, isSigner: false, isWritable: true },
+        { pubkey: userEtfAta, isSigner: false, isWritable: true },
+        { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+        { pubkey: treasuryEtfAta, isSigner: false, isWritable: true },
+        ...wrongVaults.map(v => ({ pubkey: v, isSigner: false, isWritable: true })),
+        ...userTokens.map(u => ({ pubkey: u, isSigner: false, isWritable: true })),
+      ],
+      data: badWithdrawData,
+    })), [payer]);
+    throw new Error("Should have failed but succeeded");
+  } catch (err: any) {
+    const msg = err.message || String(err);
+    // VaultMismatch = 9013 = 0x2335
+    if (msg.includes("0x2335") || msg.includes("9013")) {
+      console.log("  Correctly rejected with VaultMismatch:", msg.match(/0x[0-9a-f]+/i)?.[0] ?? "9013");
+    } else if (msg === "Should have failed but succeeded") {
+      throw new Error("Withdraw with wrong vault should have failed");
+    } else {
+      console.log("  Rejected with error (unexpected code):", msg.slice(0, 120));
+    }
+  }
+
+  // TODO(#33 follow-up): Once axis-vault exposes a SetPaused instruction,
+  // add paused-pool tests for both Deposit and Withdraw. Expected behavior:
+  // etf.paused != 0 → PoolPaused (9012 / 0x2334) on both code paths.
+
+  // 16a. Test: Deposit with min_mint_out too high → SlippageExceeded (9015 / 0x2337)
+  // Exercises the Deposit slippage guard. The expected mint is bounded by
+  // the vault's proportional math; we set min_mint_out above any possible
+  // result to force rejection without relying on price movement.
+  console.log("\n> Test: Deposit with min_mint_out too high (expect SlippageExceeded)");
+  try {
+    const slipData = Buffer.concat([
+      Buffer.from([1]),
+      u64Le(100_000_000n),
+      u64Le(999_999_999_999_999n), // unreachable min_mint_out
+      Buffer.from([nameBytes.length]),
+      nameBytes,
+    ]);
+    await sendAndConfirmTransaction(conn, new Transaction().add(new TransactionInstruction({
+      programId: PROGRAM_ID,
+      keys: [
+        { pubkey: payer.publicKey, isSigner: true, isWritable: true },
+        { pubkey: etfState, isSigner: false, isWritable: true },
+        { pubkey: etfMintKp.publicKey, isSigner: false, isWritable: true },
+        { pubkey: userEtfAta, isSigner: false, isWritable: true },
+        { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+        { pubkey: treasuryEtfAta, isSigner: false, isWritable: true },
+        ...userTokens.map(u => ({ pubkey: u, isSigner: false, isWritable: true })),
+        ...vaults.map(v => ({ pubkey: v, isSigner: false, isWritable: true })),
+      ],
+      data: slipData,
+    })), [payer]);
+    throw new Error("Should have failed but succeeded");
+  } catch (err: any) {
+    const msg = err.message || String(err);
+    if (msg.includes("0x2337") || msg.includes("9015")) {
+      console.log("  Correctly rejected with SlippageExceeded:", msg.match(/0x[0-9a-f]+/i)?.[0] ?? "9015");
+    } else if (msg === "Should have failed but succeeded") {
+      throw new Error("Deposit with unreachable min_mint_out should have failed");
+    } else {
+      console.log("  Rejected with error (unexpected code):", msg.slice(0, 120));
+    }
+  }
+
+  // 16b. Test: Withdraw with min_tokens_out too high → SlippageExceeded (9015 / 0x2337)
+  console.log("\n> Test: Withdraw with min_tokens_out too high (expect SlippageExceeded)");
+  try {
+    const slipData = Buffer.concat([
+      Buffer.from([2]),
+      u64Le(1_000n),                   // tiny burn → tiny total output
+      u64Le(999_999_999_999_999n),     // unreachable min_tokens_out
+      Buffer.from([nameBytes.length]),
+      nameBytes,
+    ]);
+    await sendAndConfirmTransaction(conn, new Transaction().add(new TransactionInstruction({
+      programId: PROGRAM_ID,
+      keys: [
+        { pubkey: payer.publicKey, isSigner: true, isWritable: true },
+        { pubkey: etfState, isSigner: false, isWritable: true },
+        { pubkey: etfMintKp.publicKey, isSigner: false, isWritable: true },
+        { pubkey: userEtfAta, isSigner: false, isWritable: true },
+        { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+        { pubkey: treasuryEtfAta, isSigner: false, isWritable: true },
+        ...vaults.map(v => ({ pubkey: v, isSigner: false, isWritable: true })),
+        ...userTokens.map(u => ({ pubkey: u, isSigner: false, isWritable: true })),
+      ],
+      data: slipData,
+    })), [payer]);
+    throw new Error("Should have failed but succeeded");
+  } catch (err: any) {
+    const msg = err.message || String(err);
+    if (msg.includes("0x2337") || msg.includes("9015")) {
+      console.log("  Correctly rejected with SlippageExceeded:", msg.match(/0x[0-9a-f]+/i)?.[0] ?? "9015");
+    } else if (msg === "Should have failed but succeeded") {
+      throw new Error("Withdraw with unreachable min_tokens_out should have failed");
+    } else {
+      console.log("  Rejected with error (unexpected code):", msg.slice(0, 120));
+    }
+  }
+
+  // 16c. Test: Deposit with skewed vault balances → NavDeviationExceeded (9016 / 0x2338)
+  // The Deposit NAV check bounds the spread between per-vault mint candidates.
+  // We deliberately inflate vault[0]'s balance (by minting extra basket tokens
+  // directly into it, bypassing the Deposit path) so the vault ratios no
+  // longer match target weights; a subsequent Deposit must fail.
+  console.log("\n> Test: Deposit with skewed vault balances (expect NavDeviationExceeded)");
+  {
+    // Inflate vault[0] by ~50 % so candidate[0] is materially lower than
+    // candidate[1..]. Any spread > 3 % (MAX_NAV_DEVIATION_BPS=300) trips.
+    const vault0BalBefore = (await getAccount(conn, vaults[0])).amount;
+    const skewAmount = vault0BalBefore / 2n;
+    await mintTo(conn, payer, mints[0], vaults[0], payer, skewAmount);
+    try {
+      const navData = Buffer.concat([
+        Buffer.from([1]),
+        u64Le(100_000_000n),
+        u64Le(0n),
+        Buffer.from([nameBytes.length]),
+        nameBytes,
+      ]);
+      await sendAndConfirmTransaction(conn, new Transaction().add(new TransactionInstruction({
+        programId: PROGRAM_ID,
+        keys: [
+          { pubkey: payer.publicKey, isSigner: true, isWritable: true },
+          { pubkey: etfState, isSigner: false, isWritable: true },
+          { pubkey: etfMintKp.publicKey, isSigner: false, isWritable: true },
+          { pubkey: userEtfAta, isSigner: false, isWritable: true },
+          { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+          { pubkey: treasuryEtfAta, isSigner: false, isWritable: true },
+          ...userTokens.map(u => ({ pubkey: u, isSigner: false, isWritable: true })),
+          ...vaults.map(v => ({ pubkey: v, isSigner: false, isWritable: true })),
+        ],
+        data: navData,
+      })), [payer]);
+      throw new Error("Should have failed but succeeded");
+    } catch (err: any) {
+      const msg = err.message || String(err);
+      if (msg.includes("0x2338") || msg.includes("9016")) {
+        console.log("  Correctly rejected with NavDeviationExceeded:", msg.match(/0x[0-9a-f]+/i)?.[0] ?? "9016");
+      } else if (msg === "Should have failed but succeeded") {
+        throw new Error("Deposit with skewed vault should have failed NavDeviation");
+      } else {
+        console.log("  Rejected with error (unexpected code):", msg.slice(0, 120));
+      }
+    }
+  }
+
+  // 17. Test: Full withdrawal (burn_amount == total_supply) → total_supply goes to 0
+  console.log("\n> Test: Full withdrawal drains total_supply to zero");
+  {
+    const remaining = (await getAccount(conn, userEtfAta)).amount;
+    const fullWithdrawData = Buffer.concat([
+      Buffer.from([2]),
+      u64Le(remaining),
+      u64Le(0n),
+      Buffer.from([nameBytes.length]),
+      nameBytes,
+    ]);
+    await sendAndConfirmTransaction(conn, new Transaction().add(new TransactionInstruction({
+      programId: PROGRAM_ID,
+      keys: [
+        { pubkey: payer.publicKey, isSigner: true, isWritable: true },
+        { pubkey: etfState, isSigner: false, isWritable: true },
+        { pubkey: etfMintKp.publicKey, isSigner: false, isWritable: true },
+        { pubkey: userEtfAta, isSigner: false, isWritable: true },
+        { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+        { pubkey: treasuryEtfAta, isSigner: false, isWritable: true },
+        ...vaults.map(v => ({ pubkey: v, isSigner: false, isWritable: true })),
+        ...userTokens.map(u => ({ pubkey: u, isSigner: false, isWritable: true })),
+      ],
+      data: fullWithdrawData,
+    })), [payer]);
+    const etfEnd = (await getAccount(conn, userEtfAta)).amount;
+    const totalSupplyEnd = (await conn.getAccountInfo(etfState))!.data.readBigUInt64LE(408);
+    if (etfEnd !== 0n || totalSupplyEnd !== 0n) {
+      throw new Error(`Full withdrawal didn't zero out balances (etf=${etfEnd}, supply=${totalSupplyEnd})`);
+    }
+    console.log(`  Burned ${remaining}, total_supply now 0`);
+  }
+
+  // 18. Test: CreateEtf with token_count < 2 → InvalidBasketSize (9002 / 0x232A)
+  console.log("\n> Test: CreateEtf with token_count=1 (expect InvalidBasketSize)");
+  try {
+    const badName = Buffer.from("BADSIZE1");
+    const [badPda] = PublicKey.findProgramAddressSync(
+      [Buffer.from("etf"), payer.publicKey.toBuffer(), badName],
+      PROGRAM_ID,
+    );
+    const badMintKp = Keypair.generate();
+    await sendAndConfirmTransaction(conn, new Transaction().add(SystemProgram.createAccount({
+      fromPubkey: payer.publicKey, newAccountPubkey: badMintKp.publicKey,
+      lamports: mintRent, space: MINT_SIZE, programId: TOKEN_PROGRAM_ID,
+    })), [payer, badMintKp]);
+    const badVaultKp = Keypair.generate();
+    await sendAndConfirmTransaction(conn, new Transaction().add(SystemProgram.createAccount({
+      fromPubkey: payer.publicKey, newAccountPubkey: badVaultKp.publicKey,
+      lamports: vaultRent, space: ACCOUNT_SIZE, programId: TOKEN_PROGRAM_ID,
+    })), [payer, badVaultKp]);
+
+    // token_count=1, weights=[10000] — valid weight sum but basket too small
+    const badData = Buffer.concat([
+      Buffer.from([0]), Buffer.from([1]), u16Le(10000),
+      Buffer.from([badName.length]), badName,
+    ]);
+    await sendAndConfirmTransaction(conn, new Transaction().add(new TransactionInstruction({
+      programId: PROGRAM_ID,
+      keys: [
+        { pubkey: payer.publicKey, isSigner: true, isWritable: true },
+        { pubkey: badPda, isSigner: false, isWritable: true },
+        { pubkey: badMintKp.publicKey, isSigner: false, isWritable: true },
+        { pubkey: payer.publicKey, isSigner: false, isWritable: false },
+        { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+        { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+        { pubkey: mints[0], isSigner: false, isWritable: false },
+        { pubkey: badVaultKp.publicKey, isSigner: false, isWritable: true },
+      ],
+      data: badData,
+    })), [payer]);
+    throw new Error("Should have failed but succeeded");
+  } catch (err: any) {
+    const msg = err.message || String(err);
+    // InvalidBasketSize = 9002 = 0x232A
+    if (msg.includes("0x232a") || msg.includes("9002")) {
+      console.log("  Correctly rejected with InvalidBasketSize:", msg.match(/0x[0-9a-f]+/i)?.[0] ?? "9002");
+    } else if (msg === "Should have failed but succeeded") {
+      throw new Error("CreateEtf token_count=1 should have failed");
+    } else {
+      console.log("  Rejected with error (unexpected code):", msg.slice(0, 120));
+    }
+  }
+
+  // 19. Test: CreateEtf with weights summing ≠ 10_000 → WeightsMismatch (9003 / 0x232B)
+  console.log("\n> Test: CreateEtf with weights summing to 9999 (expect WeightsMismatch)");
+  try {
+    const badName = Buffer.from("BADWT01");
+    const [badPda] = PublicKey.findProgramAddressSync(
+      [Buffer.from("etf"), payer.publicKey.toBuffer(), badName],
+      PROGRAM_ID,
+    );
+    const badMintKp = Keypair.generate();
+    await sendAndConfirmTransaction(conn, new Transaction().add(SystemProgram.createAccount({
+      fromPubkey: payer.publicKey, newAccountPubkey: badMintKp.publicKey,
+      lamports: mintRent, space: MINT_SIZE, programId: TOKEN_PROGRAM_ID,
+    })), [payer, badMintKp]);
+    const badVaultKps: Keypair[] = [];
+    const badVaultsTx = new Transaction();
+    for (let i = 0; i < TOKEN_COUNT; i++) {
+      const kp = Keypair.generate();
+      badVaultKps.push(kp);
+      badVaultsTx.add(SystemProgram.createAccount({
+        fromPubkey: payer.publicKey, newAccountPubkey: kp.publicKey,
+        lamports: vaultRent, space: ACCOUNT_SIZE, programId: TOKEN_PROGRAM_ID,
+      }));
+    }
+    await sendAndConfirmTransaction(conn, badVaultsTx, [payer, ...badVaultKps]);
+
+    // weights sum to 9999 (not 10000)
+    const badWeights = [3333, 3333, 3333];
+    const wbuf = Buffer.alloc(TOKEN_COUNT * 2);
+    for (let i = 0; i < TOKEN_COUNT; i++) wbuf.writeUInt16LE(badWeights[i], i * 2);
+    const badData = Buffer.concat([
+      Buffer.from([0]), Buffer.from([TOKEN_COUNT]), wbuf,
+      Buffer.from([badName.length]), badName,
+    ]);
+    await sendAndConfirmTransaction(conn, new Transaction().add(new TransactionInstruction({
+      programId: PROGRAM_ID,
+      keys: [
+        { pubkey: payer.publicKey, isSigner: true, isWritable: true },
+        { pubkey: badPda, isSigner: false, isWritable: true },
+        { pubkey: badMintKp.publicKey, isSigner: false, isWritable: true },
+        { pubkey: payer.publicKey, isSigner: false, isWritable: false },
+        { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+        { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+        ...mints.map(m => ({ pubkey: m, isSigner: false, isWritable: false })),
+        ...badVaultKps.map(kp => ({ pubkey: kp.publicKey, isSigner: false, isWritable: true })),
+      ],
+      data: badData,
+    })), [payer]);
+    throw new Error("Should have failed but succeeded");
+  } catch (err: any) {
+    const msg = err.message || String(err);
+    // WeightsMismatch = 9003 = 0x232B
+    if (msg.includes("0x232b") || msg.includes("9003")) {
+      console.log("  Correctly rejected with WeightsMismatch:", msg.match(/0x[0-9a-f]+/i)?.[0] ?? "9003");
+    } else if (msg === "Should have failed but succeeded") {
+      throw new Error("CreateEtf weights=9999 should have failed");
+    } else {
+      console.log("  Rejected with error (unexpected code):", msg.slice(0, 120));
+    }
+  }
+
+  // 20. Test: CreateEtf duplicate-init (same PDA twice) → AlreadyInitialized or system-level failure
+  // The original ETF PDA (etfState) is already initialized from Step 5. Attempt another CreateEtf
+  // targeting the same PDA — must not succeed.
+  console.log("\n> Test: CreateEtf duplicate-init on existing PDA (expect error)");
+  try {
+    const dupMintKp = Keypair.generate();
+    await sendAndConfirmTransaction(conn, new Transaction().add(SystemProgram.createAccount({
+      fromPubkey: payer.publicKey, newAccountPubkey: dupMintKp.publicKey,
+      lamports: mintRent, space: MINT_SIZE, programId: TOKEN_PROGRAM_ID,
+    })), [payer, dupMintKp]);
+    const dupVaultKps: Keypair[] = [];
+    const dupVaultsTx = new Transaction();
+    for (let i = 0; i < TOKEN_COUNT; i++) {
+      const kp = Keypair.generate();
+      dupVaultKps.push(kp);
+      dupVaultsTx.add(SystemProgram.createAccount({
+        fromPubkey: payer.publicKey, newAccountPubkey: kp.publicKey,
+        lamports: vaultRent, space: ACCOUNT_SIZE, programId: TOKEN_PROGRAM_ID,
+      }));
+    }
+    await sendAndConfirmTransaction(conn, dupVaultsTx, [payer, ...dupVaultKps]);
+
+    const dupData = Buffer.concat([
+      Buffer.from([0]), Buffer.from([TOKEN_COUNT]), weightsBuf,
+      Buffer.from([nameBytes.length]), nameBytes, // same name as Step 5 → same PDA
+    ]);
+    await sendAndConfirmTransaction(conn, new Transaction().add(new TransactionInstruction({
+      programId: PROGRAM_ID,
+      keys: [
+        { pubkey: payer.publicKey, isSigner: true, isWritable: true },
+        { pubkey: etfState, isSigner: false, isWritable: true },       // already-init'd PDA
+        { pubkey: dupMintKp.publicKey, isSigner: false, isWritable: true },
+        { pubkey: payer.publicKey, isSigner: false, isWritable: false },
+        { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+        { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+        ...mints.map(m => ({ pubkey: m, isSigner: false, isWritable: false })),
+        ...dupVaultKps.map(kp => ({ pubkey: kp.publicKey, isSigner: false, isWritable: true })),
+      ],
+      data: dupData,
+    })), [payer]);
+    throw new Error("Should have failed but succeeded");
+  } catch (err: any) {
+    const msg = err.message || String(err);
+    // AlreadyInitialized = 9001 = 0x2329. Accept either the custom code
+    // or the system-level "account already in use" since CreateAccount
+    // may fail first depending on execution order.
+    if (msg.includes("0x2329") || msg.includes("9001") || msg.includes("already in use")) {
+      console.log("  Correctly rejected:", msg.match(/0x[0-9a-f]+/i)?.[0] ?? "already-initialized");
+    } else if (msg === "Should have failed but succeeded") {
+      throw new Error("CreateEtf duplicate-init should have failed");
+    } else {
       console.log("  Rejected with error (unexpected code):", msg.slice(0, 120));
     }
   }

@@ -13,6 +13,7 @@ fn panic(_info: &core::panic::PanicInfo) -> ! {
     unsafe { core::hint::unreachable_unchecked() }
 }
 
+pub mod constants;
 pub mod error;
 pub mod instructions;
 pub mod state;

@@ -34,6 +34,7 @@ enum Instruction {
     AddLiquidity = 4,
     WithdrawFees = 5,
     CloseBatchHistory = 7,
+    CloseExpiredTicket = 8,
 }
 
 impl Instruction {
@@ -46,6 +47,7 @@ impl Instruction {
             4 => Some(Instruction::AddLiquidity),
             5 => Some(Instruction::WithdrawFees),
             7 => Some(Instruction::CloseBatchHistory),
+            8 => Some(Instruction::CloseExpiredTicket),
             _ => None,
         }
     }
@@ -142,6 +144,10 @@ pub fn process_instruction(
 
         Instruction::CloseBatchHistory => {
             instructions::process_close_batch_history_3(program_id, accounts)
+        }
+
+        Instruction::CloseExpiredTicket => {
+            instructions::process_close_expired_ticket_3(program_id, accounts)
         }
     }
 }

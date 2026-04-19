@@ -559,6 +559,35 @@ async function main() {
     }
   }
 
+  // ── Step 12: CloseExpiredTicket — should fail (BatchWindowNotEnded) ──
+  console.log("\n▶ Step 12: CloseExpiredTicket on ticket (expect BatchWindowNotEnded)");
+  try {
+    const closeExpiredTicketIx = new TransactionInstruction({
+      programId: PROGRAM_ID,
+      keys: [
+        { pubkey: payer.publicKey, isSigner: true, isWritable: false },
+        { pubkey: pool, isSigner: false, isWritable: false },
+        { pubkey: ticket, isSigner: false, isWritable: true },
+        { pubkey: payer.publicKey, isSigner: false, isWritable: true },
+      ],
+      data: Buffer.from([8]),
+    });
+    await sendAndConfirmTransaction(conn,
+      new Transaction().add(closeExpiredTicketIx), [payer]
+    );
+    throw new Error("CloseExpiredTicket should have failed but succeeded");
+  } catch (err: any) {
+    const msg = err.message ?? String(err);
+    if (msg.includes("0x1f42") || msg.includes("8002") || msg.includes("BatchWindowNotEnded")) {
+      console.log("  Correctly rejected: BatchWindowNotEnded (0x1F42 / 8002)");
+    } else if (msg.includes("should have failed")) {
+      throw err;
+    } else {
+      console.log(`  Rejected with error: ${msg.slice(0, 120)}`);
+      console.log("  (Expected BatchWindowNotEnded — TICKET_EXPIRY_BATCHES not reached)");
+    }
+  }
+
   // Summary
   console.log("\n╔══════════════════════════════════════════════════╗");
   console.log("║              CU Summary                          ║");

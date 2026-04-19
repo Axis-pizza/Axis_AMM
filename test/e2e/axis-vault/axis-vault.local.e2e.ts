@@ -736,8 +736,12 @@ async function main() {
     }
   }
 
-  // 17. Test: Full withdrawal (burn_amount == total_supply) → total_supply goes to 0
-  console.log("\n> Test: Full withdrawal drains total_supply to zero");
+  // 17. Test: Full user-balance withdrawal → user goes to 0, total_supply
+  // shrinks by effective_burn (post-fee). With the fee mechanism the fee
+  // portion transfers to treasury rather than burning, so total_supply
+  // retains exactly the treasury's ETF balance. The invariant asserted
+  // here is the post-withdraw one: total_supply == treasury_etf_balance.
+  console.log("\n> Test: Full withdrawal; total_supply should equal treasury balance");
   {
     const remaining = (await getAccount(conn, userEtfAta)).amount;
     const fullWithdrawData = Buffer.concat([
@@ -762,11 +766,15 @@ async function main() {
       data: fullWithdrawData,
     })), [payer]);
     const etfEnd = (await getAccount(conn, userEtfAta)).amount;
+    const treasuryEnd = (await getAccount(conn, treasuryEtfAta)).amount;
     const totalSupplyEnd = (await conn.getAccountInfo(etfState))!.data.readBigUInt64LE(408);
-    if (etfEnd !== 0n || totalSupplyEnd !== 0n) {
-      throw new Error(`Full withdrawal didn't zero out balances (etf=${etfEnd}, supply=${totalSupplyEnd})`);
+    if (etfEnd !== 0n) {
+      throw new Error(`Full withdrawal left user ETF balance > 0: ${etfEnd}`);
     }
-    console.log(`  Burned ${remaining}, total_supply now 0`);
+    if (totalSupplyEnd !== treasuryEnd) {
+      throw new Error(`Supply/treasury mismatch after full withdraw: supply=${totalSupplyEnd}, treasury=${treasuryEnd}`);
+    }
+    console.log(`  Burned ${remaining}; user=0, total_supply=${totalSupplyEnd} (== treasury)`);
   }
 
   // 18. Test: CreateEtf with token_count < 2 → InvalidBasketSize (9002 / 0x232A)

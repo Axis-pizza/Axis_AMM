@@ -38,6 +38,8 @@ pub enum Pfda3Error {
     InvariantViolation = 8030,
     /// Bid is disproportionately large relative to batch volume
     BidExcessive = 8031,
+    /// WithdrawFees requested amount exceeds tracked reserves (#33)
+    FeeWithdrawExceedsReserves = 8032,
 }
 
 impl From<Pfda3Error> for ProgramError {

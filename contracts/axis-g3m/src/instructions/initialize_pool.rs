@@ -86,6 +86,17 @@ pub fn process_initialize_pool(
         return Err(ProgramError::InvalidSeeds);
     }
 
+    // #33: explicit re-init guard. CreateAccount below rejects
+    // already-funded accounts, but checking the discriminator up-front
+    // gives a clean, grep-able failure instead of a generic system-
+    // program error. Defense in depth.
+    {
+        let data = pool_account.try_borrow_data()?;
+        if data.len() >= 8 && data[..8] == G3mPoolState::DISCRIMINATOR {
+            return Err(G3mError::AlreadyInitialized.into());
+        }
+    }
+
     // Create pool account via CPI
     let bump_bytes = [bump];
     let signer_seeds = [

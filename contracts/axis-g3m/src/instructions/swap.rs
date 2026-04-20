@@ -28,7 +28,7 @@ use crate::state::G3mPoolState;
 ///   [2..10]:  amount_in: u64 LE
 ///   [10..18]: min_amount_out: u64 LE
 pub fn process_swap(
-    _program_id: &Pubkey,
+    program_id: &Pubkey,
     accounts: &[AccountInfo],
     in_idx: u8,
     out_idx: u8,
@@ -45,6 +45,14 @@ pub fn process_swap(
 
     if !user.is_signer() {
         return Err(ProgramError::MissingRequiredSignature);
+    }
+
+    // #33: verify pool_account is owned by this program. Rebalance
+    // already does this; Swap did not, leaving a window for a crafted
+    // look-alike account with the right discriminator to pass the
+    // subsequent is_initialized / vault cross-checks.
+    if pool_account.owner() != program_id {
+        return Err(ProgramError::IllegalOwner);
     }
 
     // Read pool state

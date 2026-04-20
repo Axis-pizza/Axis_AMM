@@ -38,6 +38,12 @@ pub fn process_initialize_pool(
     if initial_weight_a > 1_000_000 {
         return Err(PfmmError::InvalidWeight.into());
     }
+    // A fee ≥ 100% would consume every swap output; reject at init so
+    // a misconfigured pool can never be deployed. kidneyweakx flagged
+    // the missing bound in #33.
+    if base_fee_bps >= 10_000 {
+        return Err(PfmmError::InvalidFeeBps.into());
+    }
 
     let [payer, pool_state_ai, batch_queue_ai, token_a_mint, token_b_mint, vault_a, vault_b, system_program, token_program, ..] =
         accounts

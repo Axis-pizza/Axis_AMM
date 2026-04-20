@@ -58,7 +58,16 @@ pub fn process_instruction(
 
     match disc {
         Instruction::CreateEtf => {
-            // Data: [token_count: u8][weights: [u16 LE; N]][name_len: u8][name: bytes]
+            // Data layout (#37):
+            //   [token_count: u8]
+            //   [weights: [u16 LE; N]]
+            //   [ticker_len: u8][ticker: bytes]
+            //   [name_len: u8][name: bytes]
+            //
+            // Ticker is laid out before name so clients can parse the
+            // metadata in one forward pass. All length-prefixed fields
+            // are u8-prefixed (16/32 byte maxima enforced by the
+            // instruction handler).
             if data.is_empty() {
                 return Err(ProgramError::InvalidInstructionData);
             }
@@ -75,15 +84,23 @@ pub fn process_instruction(
                 weights[i] = u16::from_le_bytes([data[off], data[off + 1]]);
             }
 
-            let name_len = data[weights_end] as usize;
-            let name_start = weights_end + 1;
+            let ticker_len = data[weights_end] as usize;
+            let ticker_start = weights_end + 1;
+            if data.len() < ticker_start + ticker_len + 1 {
+                return Err(ProgramError::InvalidInstructionData);
+            }
+            let ticker = &data[ticker_start..ticker_start + ticker_len];
+
+            let name_len_off = ticker_start + ticker_len;
+            let name_len = data[name_len_off] as usize;
+            let name_start = name_len_off + 1;
             if data.len() < name_start + name_len {
                 return Err(ProgramError::InvalidInstructionData);
             }
             let name = &data[name_start..name_start + name_len];
 
             instructions::process_create_etf(
-                program_id, accounts, token_count, &weights[..tc], name,
+                program_id, accounts, token_count, &weights[..tc], ticker, name,
             )
         }
 
@@ -151,5 +168,8 @@ mod tests {
         eprintln!("  total_supply: {}", (&e.total_supply as *const _ as usize) - b);
         eprintln!("  treasury: {}", (&e.treasury as *const _ as usize) - b);
         eprintln!("  bump: {}", (&e.bump as *const _ as usize) - b);
+        eprintln!("  name: {}", (&e.name as *const _ as usize) - b);
+        eprintln!("  ticker: {}", (&e.ticker as *const _ as usize) - b);
+        eprintln!("  created_at_slot: {}", (&e.created_at_slot as *const _ as usize) - b);
     }
 }

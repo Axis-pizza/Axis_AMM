@@ -9,6 +9,7 @@ use pinocchio::{
 use pinocchio_system::instructions::CreateAccount;
 use pinocchio_token::instructions::{InitializeAccount3, InitializeMint2};
 
+use crate::constants::{protocol_treasury_is_active, PROTOCOL_TREASURY};
 use crate::error::VaultError;
 use crate::state::{
     load_mut, EtfState, MAX_BASKET_TOKENS, MAX_ETF_NAME_LEN, MAX_ETF_TICKER_LEN,
@@ -95,6 +96,14 @@ pub fn process_create_etf(
 
     if !authority.is_signer() {
         return Err(ProgramError::MissingRequiredSignature);
+    }
+
+    // #38 governance gate: once PROTOCOL_TREASURY is flipped from zeros to
+    // the deployed Squads V4 multisig, every ETF must route fees there. The
+    // gate is inert while the constant is all-zeros so devnet tests using
+    // throwaway treasuries still work until ops is ready.
+    if protocol_treasury_is_active() && treasury_ai.key() != &PROTOCOL_TREASURY {
+        return Err(VaultError::TreasuryNotApproved.into());
     }
 
     // Derive EtfState PDA: [b"etf", authority, name]

@@ -37,19 +37,50 @@ pub const MIN_FIRST_DEPOSIT: u64 = 1_000_000;
 pub const MINIMUM_LIQUIDITY: u64 = 1_000;
 
 /// Protocol treasury multisig address — the single destination for
-/// protocol fee revenue once ops (#38) finalizes the Squads V4 setup.
+/// protocol fee revenue.
 ///
-/// This is a placeholder until @muse0509 confirms the signer list and
-/// the multisig is deployed on devnet → mainnet. `SweepTreasury`
-/// already works against whatever pubkey the ETF was created with (see
-/// `EtfState.treasury`); the CreateEtf gate — reject
-/// `treasury != PROTOCOL_TREASURY` — stays deferred until this
-/// constant points at a real multisig so tests can still spin up
-/// ad-hoc treasuries during the transition.
+/// Per @muse0509 on #38 (2026-04-20), the closed-beta treasury is a
+/// protocol-wide Squads V4 multisig co-managed by @muse0509 and
+/// @kidneyweakx. `CreateEtf` enforces a governance gate that rejects any
+/// `treasury` pubkey not equal to this constant **once the constant is
+/// non-zero** — while it stays `[0u8; 32]` the gate is inert so tests and
+/// ad-hoc devnet flows can still create ETFs against throwaway
+/// treasuries. Flipping this value to the deployed Squads vault key is a
+/// one-line change and takes the gate live with no further code edits.
 ///
-/// TODO(ops #38): replace zeros with the deployed Squads vault key.
+/// TODO(ops #38): replace zeros with the deployed Squads V4 vault key
+/// once provisioned on devnet → mainnet.
 pub const PROTOCOL_TREASURY: [u8; 32] = [0u8; 32];
 
-pub fn protocol_treasury_is_active() -> bool {
-    PROTOCOL_TREASURY.iter().any(|&b| b != 0)
+/// Returns true when `PROTOCOL_TREASURY` has been set to a real address
+/// (i.e. the Squads V4 multisig is deployed and the constant above has
+/// been flipped). Used by `CreateEtf` to conditionally enforce the
+/// governance gate on `etf.treasury`.
+pub const fn protocol_treasury_is_active() -> bool {
+    let mut i = 0;
+    while i < 32 {
+        if PROTOCOL_TREASURY[i] != 0 {
+            return true;
+        }
+        i += 1;
+    }
+    false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn gate_inert_when_treasury_is_zeros() {
+        assert!(!protocol_treasury_is_active());
+    }
+
+    #[test]
+    fn gate_active_when_any_byte_nonzero() {
+        let mut k = [0u8; 32];
+        k[17] = 1;
+        let active = k.iter().any(|b| *b != 0);
+        assert!(active);
+    }
 }

@@ -16,3 +16,22 @@ pub const TOKEN_PROGRAM_ID: [u8; 32] = [
 /// reject early with `NavDeviationExceeded` rather than minting at a stale
 /// composition. 300 bps = 3 %.
 pub const MAX_NAV_DEVIATION_BPS: u64 = 300;
+
+/// Minimum base amount accepted on the first deposit into a fresh ETF.
+/// Closes the cheap-attacker leg of the inflation / donation attack:
+/// without this, an attacker could seed with `amount = 1`, then donate
+/// huge quantities of basket tokens directly into the vault ATAs to
+/// push every proportional-mint candidate to zero for the next
+/// legitimate depositor (they would revert on `ZeroDeposit`, bricking
+/// the pool). 1_000_000 = 1 token at 6 decimals.
+pub const MIN_FIRST_DEPOSIT: u64 = 1_000_000;
+
+/// Virtual liquidity lock added to `etf.total_supply` on the first
+/// deposit but never minted to any holder. Combined with
+/// `MIN_FIRST_DEPOSIT` this keeps `vault_balance / total_supply`
+/// bounded below for the life of the ETF so that vault donations can
+/// never round proportional math to zero. Mirrors Uniswap V2's
+/// `MINIMUM_LIQUIDITY = 1_000`. Because nobody holds these tokens,
+/// they can never be withdrawn — a tiny amount of each basket token
+/// is permanently stranded in the vaults, which is the intended cost.
+pub const MINIMUM_LIQUIDITY: u64 = 1_000;

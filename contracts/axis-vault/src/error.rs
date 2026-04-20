@@ -21,6 +21,7 @@ pub enum VaultError {
     SlippageExceeded = 9015,
     NavDeviationExceeded = 9016,
     TreasuryMismatch = 9017,
+    InsufficientFirstDeposit = 9018,
 }
 
 impl From<VaultError> for ProgramError {

@@ -7,7 +7,9 @@ use pinocchio::{
 };
 use pinocchio_token::instructions::{MintTo, Transfer};
 
-use crate::constants::{MAX_NAV_DEVIATION_BPS, TOKEN_PROGRAM_ID};
+use crate::constants::{
+    MAX_NAV_DEVIATION_BPS, MINIMUM_LIQUIDITY, MIN_FIRST_DEPOSIT, TOKEN_PROGRAM_ID,
+};
 use crate::error::VaultError;
 use crate::state::{load, load_mut, EtfState};
 
@@ -80,6 +82,13 @@ pub fn process_deposit(
             etf.token_vaults,
         )
     };
+
+    // First-deposit floor: reject dust-seeded ETFs before we touch any
+    // basket tokens. Pairs with the MINIMUM_LIQUIDITY lock below — see
+    // constants.rs for the rationale.
+    if total_supply == 0 && amount < MIN_FIRST_DEPOSIT {
+        return Err(VaultError::InsufficientFirstDeposit.into());
+    }
 
     // Validate etf_mint against stored state
     if etf_mint_ai.key() != &etf_mint {
@@ -200,8 +209,16 @@ pub fn process_deposit(
         .checked_mul(fee_bps as u64)
         .ok_or(VaultError::Overflow)?
         / 10_000;
+    // On the first deposit a MINIMUM_LIQUIDITY portion is permanently
+    // locked: we count it in `etf.total_supply` but do not mint it to
+    // any account. This keeps the `vault_balance / total_supply`
+    // denominator bounded for the rest of the ETF's life so future
+    // proportional math can never round to zero from vault donations.
+    let liquidity_lock: u64 = if total_supply == 0 { MINIMUM_LIQUIDITY } else { 0 };
     let net_mint = mint_amount
         .checked_sub(fee_amount)
+        .ok_or(VaultError::Overflow)?
+        .checked_sub(liquidity_lock)
         .ok_or(VaultError::Overflow)?;
 
     // Transfer basket tokens from depositor to vaults

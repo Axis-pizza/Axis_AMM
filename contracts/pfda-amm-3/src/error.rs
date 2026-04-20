@@ -40,6 +40,11 @@ pub enum Pfda3Error {
     BidExcessive = 8031,
     /// WithdrawFees requested amount exceeds tracked reserves (#33)
     FeeWithdrawExceedsReserves = 8032,
+    /// InitializePool base_fee_bps ≥ 10_000 (#33)
+    InvalidFeeBps = 8033,
+    /// PDA substitution: passed-in account does not match the PDA
+    /// derived from the declared seeds (#33 claim history/ticket)
+    PdaMismatch = 8034,
 }
 
 impl From<Pfda3Error> for ProgramError {

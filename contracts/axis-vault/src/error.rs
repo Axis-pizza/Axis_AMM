@@ -24,6 +24,9 @@ pub enum VaultError {
     InsufficientFirstDeposit = 9018,
     InvalidTicker = 9019,
     InvalidName = 9020,
+    SweepForbidden = 9021,
+    NothingToSweep = 9022,
+    TreasuryNotApproved = 9023,
 }
 
 impl From<VaultError> for ProgramError {

@@ -1296,6 +1296,199 @@ async function main() {
     Buffer.from("X".repeat(33)),
   );
 
+  // 29 — Issue #38 (on-chain SweepTreasury instruction).
+  //
+  // After Step 17 the user fully withdrew, leaving the treasury as the
+  // only ETF holder (total_supply == treasury_etf_balance). SweepTreasury
+  // is the treasury's redemption path: it burns the treasury's full ETF
+  // balance and forwards the proportional basket tokens to treasury-owned
+  // basket ATAs (no fee, no slippage guard — this is an admin op, not a
+  // trade). Steps 18-20 are fresh-ETF error tests that don't touch the
+  // main ETF, so this state still holds going into the sweep.
+  console.log("\n> Test: SweepTreasury redeems accumulated fees");
+  {
+    // Treasury's destination basket ATAs — one per basket leg, owned by
+    // the treasury pubkey. Separate from the payer's userTokens so we
+    // can assert the sweep delivered tokens to the right owner.
+    const treasuryBasketAtas: PublicKey[] = [];
+    for (let i = 0; i < TOKEN_COUNT; i++) {
+      const ata = await createAccount(conn, payer, mints[i], treasuryKp.publicKey);
+      treasuryBasketAtas.push(ata);
+    }
+
+    const treasuryEtfBefore = (await getAccount(conn, treasuryEtfAta)).amount;
+    const totalSupplyBefore = (await conn.getAccountInfo(etfState))!.data.readBigUInt64LE(408);
+    const vaultBefore: bigint[] = [];
+    for (let i = 0; i < TOKEN_COUNT; i++) {
+      vaultBefore.push((await getAccount(conn, vaults[i])).amount);
+    }
+    console.log(`  Pre-sweep: treasury_etf=${treasuryEtfBefore}, total_supply=${totalSupplyBefore}`);
+
+    const sweepData = Buffer.concat([
+      Buffer.from([3]), // disc = SweepTreasury
+      Buffer.from([nameBytes.length]),
+      nameBytes,
+    ]);
+    const sweepTx = new Transaction().add(new TransactionInstruction({
+      programId: PROGRAM_ID,
+      keys: [
+        { pubkey: treasuryKp.publicKey, isSigner: true, isWritable: true },
+        { pubkey: etfState, isSigner: false, isWritable: true },
+        { pubkey: etfMintKp.publicKey, isSigner: false, isWritable: true },
+        { pubkey: treasuryEtfAta, isSigner: false, isWritable: true },
+        { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+        // vaults (source)
+        ...vaults.map(v => ({ pubkey: v, isSigner: false, isWritable: true })),
+        // treasury basket dests
+        ...treasuryBasketAtas.map(a => ({ pubkey: a, isSigner: false, isWritable: true })),
+      ],
+      data: sweepData,
+    }));
+    await sendAndConfirmTransaction(conn, sweepTx, [payer, treasuryKp]);
+
+    const treasuryEtfAfter = (await getAccount(conn, treasuryEtfAta)).amount;
+    const totalSupplyAfter = (await conn.getAccountInfo(etfState))!.data.readBigUInt64LE(408);
+    if (treasuryEtfAfter !== 0n) {
+      throw new Error(`Post-sweep treasury ETF balance should be 0, got ${treasuryEtfAfter}`);
+    }
+    if (totalSupplyAfter !== 0n) {
+      throw new Error(`Post-sweep total_supply should be 0, got ${totalSupplyAfter}`);
+    }
+    for (let i = 0; i < TOKEN_COUNT; i++) {
+      // Treasury held 100% of supply, so every vault token moves to the
+      // matching treasury basket ATA (modulo integer-division rounding).
+      // Allow off-by-one per leg since the proportional math uses
+      // vault_balance * burn / total_supply with u128 truncation.
+      const destBal = (await getAccount(conn, treasuryBasketAtas[i])).amount;
+      const diff = vaultBefore[i] > destBal ? vaultBefore[i] - destBal : destBal - vaultBefore[i];
+      if (diff > 1n) {
+        throw new Error(
+          `Vault ${i}: expected ≈${vaultBefore[i]} to treasury, got ${destBal} (diff ${diff})`
+        );
+      }
+    }
+    console.log(`  Swept ${treasuryEtfBefore} ETF tokens; treasury basket ATAs funded`);
+  }
+
+  // 30. Rejection: non-treasury signer can't sweep.
+  // Uses a fresh ETF so the sweep target is isolated. SweepForbidden = 9021 = 0x233D
+  console.log("\n> Test: SweepTreasury signed by non-treasury (expect SweepForbidden)");
+  {
+    // Minimal fresh ETF to exercise the signer check only. We don't need
+    // any deposits — reusing the main-ETF treasury would require another
+    // round-trip to accrue fees.
+    const forbidName = Buffer.from(`FORBID${Date.now().toString(36).slice(-4).toUpperCase()}`);
+    const [forbidPda] = PublicKey.findProgramAddressSync(
+      [Buffer.from("etf"), payer.publicKey.toBuffer(), forbidName],
+      PROGRAM_ID,
+    );
+    const forbidMintKp = Keypair.generate();
+    await sendAndConfirmTransaction(conn, new Transaction().add(SystemProgram.createAccount({
+      fromPubkey: payer.publicKey, newAccountPubkey: forbidMintKp.publicKey,
+      lamports: mintRent, space: MINT_SIZE, programId: TOKEN_PROGRAM_ID,
+    })), [payer, forbidMintKp]);
+    const forbidVaultKps: Keypair[] = [];
+    const forbidVaultsTx = new Transaction();
+    for (let i = 0; i < TOKEN_COUNT; i++) {
+      const kp = Keypair.generate();
+      forbidVaultKps.push(kp);
+      forbidVaultsTx.add(SystemProgram.createAccount({
+        fromPubkey: payer.publicKey, newAccountPubkey: kp.publicKey,
+        lamports: vaultRent, space: ACCOUNT_SIZE, programId: TOKEN_PROGRAM_ID,
+      }));
+    }
+    await sendAndConfirmTransaction(conn, forbidVaultsTx, [payer, ...forbidVaultKps]);
+    const forbidTreasuryKp = Keypair.generate();
+    await sendAndConfirmTransaction(conn, new Transaction().add(
+      SystemProgram.transfer({ fromPubkey: payer.publicKey, toPubkey: forbidTreasuryKp.publicKey, lamports: LAMPORTS_PER_SOL / 20 })
+    ), [payer]);
+
+    const forbidWbuf = Buffer.alloc(TOKEN_COUNT * 2);
+    for (let i = 0; i < TOKEN_COUNT; i++) forbidWbuf.writeUInt16LE(WEIGHTS[i], i * 2);
+    const forbidTickerBytes = Buffer.from("AX");
+    await sendAndConfirmTransaction(conn, new Transaction().add(new TransactionInstruction({
+      programId: PROGRAM_ID,
+      keys: [
+        { pubkey: payer.publicKey, isSigner: true, isWritable: true },
+        { pubkey: forbidPda, isSigner: false, isWritable: true },
+        { pubkey: forbidMintKp.publicKey, isSigner: false, isWritable: true },
+        { pubkey: forbidTreasuryKp.publicKey, isSigner: false, isWritable: false },
+        { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+        { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+        ...mints.map(m => ({ pubkey: m, isSigner: false, isWritable: false })),
+        ...forbidVaultKps.map(kp => ({ pubkey: kp.publicKey, isSigner: false, isWritable: true })),
+      ],
+      data: Buffer.concat([
+        Buffer.from([0]), Buffer.from([TOKEN_COUNT]), forbidWbuf,
+        Buffer.from([forbidTickerBytes.length]), forbidTickerBytes,
+        Buffer.from([forbidName.length]), forbidName,
+      ]),
+    })), [payer]);
+
+    // To exercise the SweepForbidden path we need a populated treasury
+    // ETF ATA. Create it, deposit once to accrue a fee, then try to
+    // sweep with the wrong signer (payer, not the stored treasury).
+    const forbidTreasuryEtf = await createAccount(
+      conn, payer, forbidMintKp.publicKey, forbidTreasuryKp.publicKey,
+    );
+    const forbidUserEtf = await createAccount(
+      conn, payer, forbidMintKp.publicKey, payer.publicKey,
+    );
+    await sendAndConfirmTransaction(conn, new Transaction().add(new TransactionInstruction({
+      programId: PROGRAM_ID,
+      keys: [
+        { pubkey: payer.publicKey, isSigner: true, isWritable: true },
+        { pubkey: forbidPda, isSigner: false, isWritable: true },
+        { pubkey: forbidMintKp.publicKey, isSigner: false, isWritable: true },
+        { pubkey: forbidUserEtf, isSigner: false, isWritable: true },
+        { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+        { pubkey: forbidTreasuryEtf, isSigner: false, isWritable: true },
+        ...userTokens.map(u => ({ pubkey: u, isSigner: false, isWritable: true })),
+        ...forbidVaultKps.map(kp => ({ pubkey: kp.publicKey, isSigner: false, isWritable: true })),
+      ],
+      data: Buffer.concat([
+        Buffer.from([1]),
+        u64Le(100_000_000n),
+        u64Le(0n),
+        Buffer.from([forbidName.length]), forbidName,
+      ]),
+    })), [payer]);
+
+    // Wrong-signer sweep: payer signs, but payer.publicKey != etf.treasury.
+    const forbidBasketAtas: PublicKey[] = [];
+    for (let i = 0; i < TOKEN_COUNT; i++) {
+      forbidBasketAtas.push(await createAccount(conn, payer, mints[i], forbidTreasuryKp.publicKey));
+    }
+    try {
+      await sendAndConfirmTransaction(conn, new Transaction().add(new TransactionInstruction({
+        programId: PROGRAM_ID,
+        keys: [
+          { pubkey: payer.publicKey, isSigner: true, isWritable: true }, // WRONG signer
+          { pubkey: forbidPda, isSigner: false, isWritable: true },
+          { pubkey: forbidMintKp.publicKey, isSigner: false, isWritable: true },
+          { pubkey: forbidTreasuryEtf, isSigner: false, isWritable: true },
+          { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+          ...forbidVaultKps.map(kp => ({ pubkey: kp.publicKey, isSigner: false, isWritable: true })),
+          ...forbidBasketAtas.map(a => ({ pubkey: a, isSigner: false, isWritable: true })),
+        ],
+        data: Buffer.concat([
+          Buffer.from([3]), Buffer.from([forbidName.length]), forbidName,
+        ]),
+      })), [payer]);
+      throw new Error("Should have failed but succeeded");
+    } catch (err: any) {
+      const msg = err.message || String(err);
+      // SweepForbidden = 9021 = 0x233D
+      if (msg.includes("0x233d") || msg.includes("9021")) {
+        console.log("  Correctly rejected with SweepForbidden:", msg.match(/0x[0-9a-f]+/i)?.[0] ?? "9021");
+      } else if (msg === "Should have failed but succeeded") {
+        throw new Error("SweepTreasury with wrong signer should have failed");
+      } else {
+        console.log("  Rejected with error (unexpected code):", msg.slice(0, 120));
+      }
+    }
+  }
+
   console.log("\n=== Vault E2E PASSED ===");
 }
 main().catch(err => { console.error("Error:", err.message || err); process.exit(1); });

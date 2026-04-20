@@ -30,6 +30,7 @@ enum Instruction {
     CreateEtf = 0,
     Deposit = 1,
     Withdraw = 2,
+    SweepTreasury = 3,
 }
 
 impl Instruction {
@@ -38,6 +39,7 @@ impl Instruction {
             0 => Some(Instruction::CreateEtf),
             1 => Some(Instruction::Deposit),
             2 => Some(Instruction::Withdraw),
+            3 => Some(Instruction::SweepTreasury),
             _ => None,
         }
     }
@@ -146,6 +148,21 @@ pub fn process_instruction(
             let name = &data[17..17 + name_len];
 
             instructions::process_withdraw(program_id, accounts, burn_amount, min_tokens_out, name)
+        }
+
+        Instruction::SweepTreasury => {
+            // Data: [name_len: u8][name: bytes]
+            // Burn amount is read on-chain from treasury_etf_ata balance
+            // so the cranker doesn't need to fetch-then-submit.
+            if data.is_empty() {
+                return Err(ProgramError::InvalidInstructionData);
+            }
+            let name_len = data[0] as usize;
+            if data.len() < 1 + name_len {
+                return Err(ProgramError::InvalidInstructionData);
+            }
+            let name = &data[1..1 + name_len];
+            instructions::process_sweep_treasury(program_id, accounts, name)
         }
     }
 }

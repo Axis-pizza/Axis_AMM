@@ -35,3 +35,21 @@ pub const MIN_FIRST_DEPOSIT: u64 = 1_000_000;
 /// they can never be withdrawn — a tiny amount of each basket token
 /// is permanently stranded in the vaults, which is the intended cost.
 pub const MINIMUM_LIQUIDITY: u64 = 1_000;
+
+/// Protocol treasury multisig address — the single destination for
+/// protocol fee revenue once ops (#38) finalizes the Squads V4 setup.
+///
+/// This is a placeholder until @muse0509 confirms the signer list and
+/// the multisig is deployed on devnet → mainnet. `SweepTreasury`
+/// already works against whatever pubkey the ETF was created with (see
+/// `EtfState.treasury`); the CreateEtf gate — reject
+/// `treasury != PROTOCOL_TREASURY` — stays deferred until this
+/// constant points at a real multisig so tests can still spin up
+/// ad-hoc treasuries during the transition.
+///
+/// TODO(ops #38): replace zeros with the deployed Squads vault key.
+pub const PROTOCOL_TREASURY: [u8; 32] = [0u8; 32];
+
+pub fn protocol_treasury_is_active() -> bool {
+    PROTOCOL_TREASURY.iter().any(|&b| b != 0)
+}

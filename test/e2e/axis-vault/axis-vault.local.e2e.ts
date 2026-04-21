@@ -178,13 +178,17 @@ async function main() {
   }
 
   // Fee assertion: first deposit is 1_000_000_000 base; fee_bps=30 (0.3%)
-  // so treasury should hold 3_000_000 ETF tokens and user ETF balance
-  // should be exactly 997_000_000 (net of fee). Asserting both proves the
-  // fee actually moved to treasury rather than being silently destroyed.
+  // so treasury should hold 3_000_000 ETF tokens. Because this is the
+  // first deposit into a fresh ETF, MINIMUM_LIQUIDITY (=1_000) is also
+  // locked virtually in total_supply — so the user receives
+  // 1_000_000_000 - 3_000_000 (fee) - 1_000 (lock) = 996_999_000. The
+  // MINIMUM_LIQUIDITY tokens are not minted to any holder; they're just
+  // counted in total_supply to keep proportional math bounded (see
+  // issue #35 / constants.rs).
   {
     const treasuryBal = (await getAccount(conn, treasuryEtfAta)).amount;
     const expectedFee = 3_000_000n;
-    const expectedNet = 997_000_000n;
+    const expectedNet = 996_999_000n;
     if (treasuryBal !== expectedFee) {
       throw new Error(`Deposit fee mismatch: treasury=${treasuryBal}, expected=${expectedFee}`);
     }
@@ -192,6 +196,7 @@ async function main() {
       throw new Error(`Net mint mismatch: user=${etfBalance}, expected=${expectedNet}`);
     }
     console.log(`  Treasury fee received: ${treasuryBal} (30 bps of 1_000_000_000)`);
+    console.log(`  MINIMUM_LIQUIDITY locked: 1_000 (virtual, never withdrawable)`);
   }
 
   // 8. Withdraw — burn half the ETF tokens
@@ -237,14 +242,16 @@ async function main() {
     console.log(`  Token ${i} received back: ${received.toLocaleString()}`);
   }
 
-  // Withdraw fee assertion: burn_amount was etfBalance/2 = 498_500_000;
-  // fee_bps=30 → fee = 1_495_500. Treasury already had 3_000_000 from the
-  // Deposit fee, so its balance should now be 3_000_000 + 1_495_500 =
-  // 4_495_500. Asserting the delta proves the withdraw fee transfer
-  // actually hit the treasury (and wasn't silently burned).
+  // Withdraw fee assertion: etfBalance=996_999_000 (post-#35 MINIMUM_LIQUIDITY
+  // lock), so burnAmount = etfBalance/2 = 498_499_500. fee_bps=30 →
+  // fee = floor(498_499_500 * 30 / 10_000) = 1_495_498 (Rust integer
+  // div on 14_954_985_000 / 10_000 truncates the .5). Treasury already
+  // had 3_000_000 from Deposit, so its balance should now be
+  // 3_000_000 + 1_495_498 = 4_495_498. Asserting the delta proves the
+  // withdraw fee transfer actually hit the treasury.
   {
     const treasuryBalAfter = (await getAccount(conn, treasuryEtfAta)).amount;
-    const expected = 4_495_500n;
+    const expected = 4_495_498n;
     if (treasuryBalAfter !== expected) {
       throw new Error(`Withdraw fee mismatch: treasury=${treasuryBalAfter}, expected=${expected}`);
     }
@@ -744,9 +751,10 @@ async function main() {
   // 17. Test: Full user-balance withdrawal → user goes to 0, total_supply
   // shrinks by effective_burn (post-fee). With the fee mechanism the fee
   // portion transfers to treasury rather than burning, so total_supply
-  // retains exactly the treasury's ETF balance. The invariant asserted
-  // here is the post-withdraw one: total_supply == treasury_etf_balance.
-  console.log("\n> Test: Full withdrawal; total_supply should equal treasury balance");
+  // retains the treasury's ETF balance plus the virtual MINIMUM_LIQUIDITY
+  // lock set on the first deposit (#35). Invariant asserted:
+  //   total_supply == treasury_etf_balance + MINIMUM_LIQUIDITY (=1_000)
+  console.log("\n> Test: Full withdrawal; total_supply should equal treasury balance + MINIMUM_LIQUIDITY");
   {
     const remaining = (await getAccount(conn, userEtfAta)).amount;
     const fullWithdrawData = Buffer.concat([
@@ -776,10 +784,14 @@ async function main() {
     if (etfEnd !== 0n) {
       throw new Error(`Full withdrawal left user ETF balance > 0: ${etfEnd}`);
     }
-    if (totalSupplyEnd !== treasuryEnd) {
-      throw new Error(`Supply/treasury mismatch after full withdraw: supply=${totalSupplyEnd}, treasury=${treasuryEnd}`);
+    const MINIMUM_LIQUIDITY = 1_000n;
+    if (totalSupplyEnd !== treasuryEnd + MINIMUM_LIQUIDITY) {
+      throw new Error(
+        `Supply/treasury mismatch after full withdraw: supply=${totalSupplyEnd}, ` +
+        `treasury=${treasuryEnd}, expected supply == treasury + ${MINIMUM_LIQUIDITY}`
+      );
     }
-    console.log(`  Burned ${remaining}; user=0, total_supply=${totalSupplyEnd} (== treasury)`);
+    console.log(`  Burned ${remaining}; user=0, total_supply=${totalSupplyEnd} (== treasury + MIN_LIQ)`);
   }
 
   // 18. Test: CreateEtf with token_count < 2 → InvalidBasketSize (9002 / 0x232A)
@@ -946,6 +958,189 @@ async function main() {
     } else {
       console.log("  Rejected with error (unexpected code):", msg.slice(0, 120));
     }
+  }
+
+  // 21-22 — Issue #35 (first-depositor inflation/donation DoS).
+  //
+  // Each #35 test needs its own fresh ETF because the guards only
+  // apply when total_supply == 0. We factor the setup into a helper
+  // to avoid scrolling past 200 lines of createAccount boilerplate.
+  async function spinUpFreshEtf(label: string) {
+    const name = Buffer.from(`${label}${Date.now().toString(36).slice(-4).toUpperCase()}`);
+    const [state] = PublicKey.findProgramAddressSync(
+      [Buffer.from("etf"), payer.publicKey.toBuffer(), name],
+      PROGRAM_ID,
+    );
+    const mintKp = Keypair.generate();
+    await sendAndConfirmTransaction(conn, new Transaction().add(SystemProgram.createAccount({
+      fromPubkey: payer.publicKey, newAccountPubkey: mintKp.publicKey,
+      lamports: mintRent, space: MINT_SIZE, programId: TOKEN_PROGRAM_ID,
+    })), [payer, mintKp]);
+    const vKps: Keypair[] = [];
+    const vPks: PublicKey[] = [];
+    const vtx = new Transaction();
+    for (let i = 0; i < TOKEN_COUNT; i++) {
+      const kp = Keypair.generate();
+      vKps.push(kp);
+      vPks.push(kp.publicKey);
+      vtx.add(SystemProgram.createAccount({
+        fromPubkey: payer.publicKey, newAccountPubkey: kp.publicKey,
+        lamports: vaultRent, space: ACCOUNT_SIZE, programId: TOKEN_PROGRAM_ID,
+      }));
+    }
+    await sendAndConfirmTransaction(conn, vtx, [payer, ...vKps]);
+    const treasuryKp = Keypair.generate();
+    await sendAndConfirmTransaction(conn, new Transaction().add(
+      SystemProgram.transfer({ fromPubkey: payer.publicKey, toPubkey: treasuryKp.publicKey, lamports: LAMPORTS_PER_SOL / 20 })
+    ), [payer]);
+
+    // CreateEtf
+    const wbuf = Buffer.alloc(TOKEN_COUNT * 2);
+    for (let i = 0; i < TOKEN_COUNT; i++) wbuf.writeUInt16LE(WEIGHTS[i], i * 2);
+    const cdata = Buffer.concat([
+      Buffer.from([0]), Buffer.from([TOKEN_COUNT]), wbuf,
+      Buffer.from([name.length]), name,
+    ]);
+    await sendAndConfirmTransaction(conn, new Transaction().add(new TransactionInstruction({
+      programId: PROGRAM_ID,
+      keys: [
+        { pubkey: payer.publicKey, isSigner: true, isWritable: true },
+        { pubkey: state, isSigner: false, isWritable: true },
+        { pubkey: mintKp.publicKey, isSigner: false, isWritable: true },
+        { pubkey: treasuryKp.publicKey, isSigner: false, isWritable: false },
+        { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+        { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+        ...mints.map(m => ({ pubkey: m, isSigner: false, isWritable: false })),
+        ...vPks.map(v => ({ pubkey: v, isSigner: false, isWritable: true })),
+      ],
+      data: cdata,
+    })), [payer]);
+
+    const userEtf = await createAccount(conn, payer, mintKp.publicKey, payer.publicKey);
+    const treasuryEtf = await createAccount(conn, payer, mintKp.publicKey, treasuryKp.publicKey);
+    return { name, state, mintKp, vPks, userEtf, treasuryEtf };
+  }
+
+  // 21. Fresh ETF + first deposit below MIN_FIRST_DEPOSIT → InsufficientFirstDeposit (9018 / 0x233A)
+  console.log("\n> Test: First deposit below MIN_FIRST_DEPOSIT (expect InsufficientFirstDeposit)");
+  {
+    const fresh = await spinUpFreshEtf("MINDEP");
+    try {
+      // amount = 1 (the attacker's cheap seed in the #35 scenario).
+      const data = Buffer.concat([
+        Buffer.from([1]),
+        u64Le(1n),
+        u64Le(0n),
+        Buffer.from([fresh.name.length]),
+        fresh.name,
+      ]);
+      await sendAndConfirmTransaction(conn, new Transaction().add(new TransactionInstruction({
+        programId: PROGRAM_ID,
+        keys: [
+          { pubkey: payer.publicKey, isSigner: true, isWritable: true },
+          { pubkey: fresh.state, isSigner: false, isWritable: true },
+          { pubkey: fresh.mintKp.publicKey, isSigner: false, isWritable: true },
+          { pubkey: fresh.userEtf, isSigner: false, isWritable: true },
+          { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+          { pubkey: fresh.treasuryEtf, isSigner: false, isWritable: true },
+          ...userTokens.map(u => ({ pubkey: u, isSigner: false, isWritable: true })),
+          ...fresh.vPks.map(v => ({ pubkey: v, isSigner: false, isWritable: true })),
+        ],
+        data,
+      })), [payer]);
+      throw new Error("Should have failed but succeeded");
+    } catch (err: any) {
+      const msg = err.message || String(err);
+      // InsufficientFirstDeposit = 9018 = 0x233A
+      if (msg.includes("0x233a") || msg.includes("9018")) {
+        console.log("  Correctly rejected with InsufficientFirstDeposit:", msg.match(/0x[0-9a-f]+/i)?.[0] ?? "9018");
+      } else if (msg === "Should have failed but succeeded") {
+        throw new Error("Tiny first deposit should have failed");
+      } else {
+        console.log("  Rejected with error (unexpected code):", msg.slice(0, 120));
+      }
+    }
+  }
+
+  // 22. Inflation/donation attack: after a legit first deposit at
+  // MIN_FIRST_DEPOSIT, an attacker donates basket tokens straight into
+  // the vault ATAs (bypassing Deposit) to try to brick the pool. With
+  // total_supply already >= MIN_FIRST_DEPOSIT, a normal-sized victim
+  // deposit must round to a non-zero mint (not ZeroDeposit), proving
+  // the pool is no longer DoS'd. Also confirms MINIMUM_LIQUIDITY is
+  // counted in total_supply but not in circulating SPL supply.
+  console.log("\n> Test: Donation attack — victim deposit must still mint > 0");
+  {
+    const fresh = await spinUpFreshEtf("DONATE");
+
+    // Legit first deposit at exactly MIN_FIRST_DEPOSIT (1 token @ 6 dp).
+    const firstData = Buffer.concat([
+      Buffer.from([1]),
+      u64Le(1_000_000n),
+      u64Le(0n),
+      Buffer.from([fresh.name.length]),
+      fresh.name,
+    ]);
+    await sendAndConfirmTransaction(conn, new Transaction().add(new TransactionInstruction({
+      programId: PROGRAM_ID,
+      keys: [
+        { pubkey: payer.publicKey, isSigner: true, isWritable: true },
+        { pubkey: fresh.state, isSigner: false, isWritable: true },
+        { pubkey: fresh.mintKp.publicKey, isSigner: false, isWritable: true },
+        { pubkey: fresh.userEtf, isSigner: false, isWritable: true },
+        { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+        { pubkey: fresh.treasuryEtf, isSigner: false, isWritable: true },
+        ...userTokens.map(u => ({ pubkey: u, isSigner: false, isWritable: true })),
+        ...fresh.vPks.map(v => ({ pubkey: v, isSigner: false, isWritable: true })),
+      ],
+      data: firstData,
+    })), [payer]);
+
+    const supplyAfterFirst = (await conn.getAccountInfo(fresh.state))!.data.readBigUInt64LE(408);
+    const userBalAfterFirst = (await getAccount(conn, fresh.userEtf)).amount;
+    console.log(`  First deposit: total_supply=${supplyAfterFirst}, user=${userBalAfterFirst}`);
+
+    // Attacker donates basket tokens straight into the vault ATAs
+    // (bypasses Deposit) at the target weight ratio so NAV deviation
+    // does not fire. Scale = 10_000x the legit leg amounts.
+    for (let i = 0; i < TOKEN_COUNT; i++) {
+      const legitLeg = 1_000_000n * BigInt(WEIGHTS[i]) / 10_000n;
+      const donation = legitLeg * 10_000n;
+      await mintTo(conn, payer, mints[i], fresh.vPks[i], payer, donation);
+    }
+
+    // Victim deposits 100 tokens. Without #35, every candidate would
+    // round to 0 and the tx would revert with ZeroDeposit. With the
+    // MIN_FIRST_DEPOSIT floor keeping total_supply bounded, the
+    // proportional math rounds to a real non-zero mint.
+    const victimData = Buffer.concat([
+      Buffer.from([1]),
+      u64Le(100_000_000n),
+      u64Le(0n),
+      Buffer.from([fresh.name.length]),
+      fresh.name,
+    ]);
+    await sendAndConfirmTransaction(conn, new Transaction().add(new TransactionInstruction({
+      programId: PROGRAM_ID,
+      keys: [
+        { pubkey: payer.publicKey, isSigner: true, isWritable: true },
+        { pubkey: fresh.state, isSigner: false, isWritable: true },
+        { pubkey: fresh.mintKp.publicKey, isSigner: false, isWritable: true },
+        { pubkey: fresh.userEtf, isSigner: false, isWritable: true },
+        { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+        { pubkey: fresh.treasuryEtf, isSigner: false, isWritable: true },
+        ...userTokens.map(u => ({ pubkey: u, isSigner: false, isWritable: true })),
+        ...fresh.vPks.map(v => ({ pubkey: v, isSigner: false, isWritable: true })),
+      ],
+      data: victimData,
+    })), [payer]);
+
+    const userBalAfterVictim = (await getAccount(conn, fresh.userEtf)).amount;
+    const mintedToVictim = userBalAfterVictim - userBalAfterFirst;
+    if (mintedToVictim === 0n) {
+      throw new Error("Victim deposit rounded to 0 — donation attack succeeded in bricking the pool");
+    }
+    console.log(`  Victim deposit after donation attack minted: ${mintedToVictim} (>0 → pool not DoS'd)`);
   }
 
   console.log("\n=== Vault E2E PASSED ===");

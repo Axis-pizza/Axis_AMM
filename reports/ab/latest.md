@@ -1,6 +1,6 @@
 # Axis A/B Test Report
 
-- Generated: 1776659570s-since-epoch
+- Generated: 1776768773s-since-epoch
 - Environment: LiteSVM (local, multi-scenario)
 
 ## Scenario 1: Small pool, tiny swap
@@ -12,11 +12,11 @@ Reserve: 1000000, Swap: 10000, Drift trigger: 200000
 
 | Metric | ETF A (PFDA-3) | ETF B (G3M) |
 |--------|---------------:|------------:|
-| Init CU | 0 | 10992 |
-| Swap/Request CU | 7739 | 10977 |
-| Clear/Rebalance CU | 10302 | 8639 |
+| Init CU | 0 | 11148 |
+| Swap/Request CU | 7739 | 11133 |
+| Clear/Rebalance CU | 10302 | 8795 |
 | Claim CU | 3033 | N/A |
-| **Total CU** | **21074** | **31774** |
+| **Total CU** | **21074** | **32242** |
 | Tokens received | 9970 | 9803 |
 | Execution slots | 11 | 1 |
 
@@ -29,11 +29,11 @@ Reserve: 100000000, Swap: 1000000, Drift trigger: 20000000
 
 | Metric | ETF A (PFDA-3) | ETF B (G3M) |
 |--------|---------------:|------------:|
-| Init CU | 0 | 14000 |
-| Swap/Request CU | 13739 | 10969 |
-| Clear/Rebalance CU | 20804 | 8630 |
+| Init CU | 0 | 17156 |
+| Swap/Request CU | 13739 | 11125 |
+| Clear/Rebalance CU | 20804 | 8786 |
 | Claim CU | 3033 | N/A |
-| **Total CU** | **37576** | **34765** |
+| **Total CU** | **37576** | **38233** |
 | Tokens received | 997000 | 980296 |
 | Execution slots | 11 | 1 |
 
@@ -46,11 +46,11 @@ Reserve: 1000000000, Swap: 5000000, Drift trigger: 200000000
 
 | Metric | ETF A (PFDA-3) | ETF B (G3M) |
 |--------|---------------:|------------:|
-| Init CU | 0 | 13998 |
-| Swap/Request CU | 9239 | 10964 |
-| Clear/Rebalance CU | 14803 | 8632 |
+| Init CU | 0 | 15654 |
+| Swap/Request CU | 22739 | 11120 |
+| Clear/Rebalance CU | 14803 | 8788 |
 | Claim CU | 3033 | N/A |
-| **Total CU** | **27075** | **34760** |
+| **Total CU** | **40575** | **36728** |
 | Tokens received | 4985000 | 4925619 |
 | Execution slots | 11 | 1 |
 
@@ -63,15 +63,15 @@ Reserve: 1000000000, Swap: 10000000, Drift trigger: 200000000
 
 | Metric | ETF A (PFDA-3) | ETF B (G3M) |
 |--------|---------------:|------------:|
-| Init CU | 0 | 12498 |
-| Swap/Request CU | 9239 | 10975 |
-| Clear/Rebalance CU | 14805 | 8633 |
+| Init CU | 0 | 12654 |
+| Swap/Request CU | 10739 | 11131 |
+| Clear/Rebalance CU | 14805 | 8789 |
 | Claim CU | 3033 | N/A |
-| **Total CU** | **27077** | **33272** |
+| **Total CU** | **28577** | **33740** |
 | Tokens received | 9970000 | 9802951 |
 | Execution slots | 11 | 1 |
 
 ## Summary
 
-- Average total CU: ETF A = 28200, ETF B = 33642
-- CU efficiency: ETF B uses 119% of ETF A's compute
+- Average total CU: ETF A = 31950, ETF B = 35235
+- CU efficiency: ETF B uses 110% of ETF A's compute

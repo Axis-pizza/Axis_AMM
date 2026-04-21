@@ -1351,8 +1351,9 @@ async function main() {
     if (treasuryEtfAfter !== 0n) {
       throw new Error(`Post-sweep treasury ETF balance should be 0, got ${treasuryEtfAfter}`);
     }
-    if (totalSupplyAfter !== 0n) {
-      throw new Error(`Post-sweep total_supply should be 0, got ${totalSupplyAfter}`);
+    const MINIMUM_LIQUIDITY = 1_000n;
+    if (totalSupplyAfter !== MINIMUM_LIQUIDITY) {
+      throw new Error(`Post-sweep total_supply should be ${MINIMUM_LIQUIDITY} (MINIMUM_LIQUIDITY lock), got ${totalSupplyAfter}`);
     }
     for (let i = 0; i < TOKEN_COUNT; i++) {
       // Treasury held 100% of supply, so every vault token moves to the

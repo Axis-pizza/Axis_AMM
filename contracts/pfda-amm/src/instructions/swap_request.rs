@@ -47,7 +47,10 @@ pub fn process_swap_request(
         return Err(ProgramError::MissingRequiredSignature);
     }
 
-    // Load and validate pool_state
+    // Load and validate pool_state. #33 flagged that the vault
+    // accounts passed in by the caller were never cross-checked
+    // against the ones stored on the pool — an attacker could redirect
+    // the incoming transfer to an arbitrary token account.
     let (pool_key, current_batch_id, current_window_end, window_slots) = {
         let data = pool_state_ai.try_borrow_data()?;
         let pool = unsafe { load::<PoolState>(&data) }.ok_or(ProgramError::InvalidAccountData)?;
@@ -69,6 +72,9 @@ pub fn process_swap_request(
         );
         if pool_state_ai.key() != &expected_pool {
             return Err(ProgramError::InvalidSeeds);
+        }
+        if vault_a.key() != &pool.vault_a || vault_b.key() != &pool.vault_b {
+            return Err(PfmmError::VaultMismatch.into());
         }
 
         (

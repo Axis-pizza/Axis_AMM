@@ -39,12 +39,18 @@ pub fn process_add_liquidity(
         return Err(ProgramError::MissingRequiredSignature);
     }
 
-    // Verify pool_state PDA and initialization
+    // Verify pool_state PDA and initialization. #33 flagged that the
+    // original version skipped the paused flag and never cross-checked
+    // the vault accounts passed in by the caller against the ones
+    // stored on the pool.
     {
         let data = pool_state_ai.try_borrow_data()?;
         let pool = unsafe { load::<PoolState>(&data) }.ok_or(ProgramError::InvalidAccountData)?;
         if !pool.is_initialized() {
             return Err(PfmmError::InvalidDiscriminator.into());
+        }
+        if pool.paused != 0 {
+            return Err(PfmmError::PoolPaused.into());
         }
         let (expected, _) = pubkey::find_program_address(
             &[b"pool", &pool.token_a_mint, &pool.token_b_mint],
@@ -52,6 +58,9 @@ pub fn process_add_liquidity(
         );
         if pool_state_ai.key() != &expected {
             return Err(ProgramError::InvalidSeeds);
+        }
+        if vault_a.key() != &pool.vault_a || vault_b.key() != &pool.vault_b {
+            return Err(PfmmError::VaultMismatch.into());
         }
     }
 

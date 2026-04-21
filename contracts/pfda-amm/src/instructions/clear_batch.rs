@@ -208,8 +208,16 @@ pub fn process_clear_batch(program_id: &Pubkey, accounts: &[AccountInfo], bid_la
                 // The clearing price is bounded by the oracle price to prevent
                 // manipulation: |clearing - oracle| <= max_deviation.
                 let effective_cp = if let Some((price_a, price_b)) = oracle_prices {
-                    // Oracle-derived market price: B per A = price_a / price_b
-                    let oracle_price = fp_div(fp_from_int(price_a >> 32), fp_from_int((price_b >> 32).max(1)));
+                    // Oracle-derived market price: B per A = price_a / price_b.
+                    // price_a / price_b are already Q32.32 (see oracle::read_switchboard_price);
+                    // dividing them with fp_div yields a Q32.32 ratio directly.
+                    //
+                    // The previous version applied `>> 32` to both sides before the
+                    // divide, which collapsed the integer part of each price and
+                    // (for sub-dollar tokens) rounded the price to 0, causing the
+                    // numerator or denominator to degenerate. Kidney flagged this
+                    // in #33.
+                    let oracle_price = fp_div(price_a, price_b.max(1));
                     // Use the G3M price but clamp to within 5% of oracle
                     let max_dev_bps: u64 = 500; // 5%
                     let lower = oracle_price.saturating_sub(oracle_price * max_dev_bps / 10_000);

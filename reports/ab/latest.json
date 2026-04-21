@@ -1,5 +1,5 @@
 {
-  "generated_at": "1776791918s-since-epoch",
+  "generated_at": "1776792947s-since-epoch",
   "environment": "LiteSVM (local, multi-scenario)",
   "scenarios": [
     {
@@ -47,9 +47,9 @@
       "pfda3": {
         "init_cu": 0,
         "add_liq_cu": 0,
-        "swap_request_cu": 7741,
+        "swap_request_cu": 6241,
         "clear_batch_cu": 10328,
-        "claim_cu": 7644,
+        "claim_cu": 6144,
         "clearing_prices": [
           0,
           0,
@@ -124,9 +124,9 @@
       "pfda3": {
         "init_cu": 0,
         "add_liq_cu": 0,
-        "swap_request_cu": 13741,
+        "swap_request_cu": 15241,
         "clear_batch_cu": 20830,
-        "claim_cu": 6144,
+        "claim_cu": 7644,
         "clearing_prices": [
           0,
           0,
@@ -165,7 +165,7 @@
         1000000000
       ],
       "g3m": {
-        "init_cu": 11248,
+        "init_cu": 12748,
         "swap_cu": 11135,
         "drift_swap_cu": 0,
         "check_drift_cu": 1166,
@@ -194,16 +194,16 @@
         "timeouts": 0,
         "critical_invariant_violation": false,
         "slot_to_finality": 0,
-        "cold_start_cu": 11248,
+        "cold_start_cu": 12748,
         "steady_state_cu": 21132,
-        "total_cu": 32380
+        "total_cu": 33880
       },
       "pfda3": {
         "init_cu": 0,
         "add_liq_cu": 0,
-        "swap_request_cu": 9241,
+        "swap_request_cu": 10741,
         "clear_batch_cu": 14829,
-        "claim_cu": 6144,
+        "claim_cu": 7644,
         "clearing_prices": [
           0,
           0,
@@ -242,7 +242,7 @@
         1000000000
       ],
       "g3m": {
-        "init_cu": 12748,
+        "init_cu": 11248,
         "swap_cu": 11146,
         "drift_swap_cu": 0,
         "check_drift_cu": 1166,
@@ -271,16 +271,16 @@
         "timeouts": 0,
         "critical_invariant_violation": false,
         "slot_to_finality": 0,
-        "cold_start_cu": 12748,
+        "cold_start_cu": 11248,
         "steady_state_cu": 21144,
-        "total_cu": 33892
+        "total_cu": 32392
       },
       "pfda3": {
         "init_cu": 0,
         "add_liq_cu": 0,
-        "swap_request_cu": 10741,
+        "swap_request_cu": 12241,
         "clear_batch_cu": 14831,
-        "claim_cu": 7644,
+        "claim_cu": 9144,
         "clearing_prices": [
           0,
           0,

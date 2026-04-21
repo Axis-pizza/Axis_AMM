@@ -58,7 +58,12 @@ pub fn process_claim_3(program_id: &Pubkey, accounts: &[AccountInfo]) -> Program
         verify_vault(vault_accounts[i], &token_mints[i], pool_key.as_ref().try_into().unwrap())?;
     }
 
-    // Load history
+    // Load history. #33 flagged that history_ai was only validated by
+    // comparing its stored `pool` field against pool_key — that left
+    // room for a crafted account with the right bytes but the wrong
+    // PDA. Re-derive the PDA from the declared seeds and compare it
+    // to history_ai.key() so only the canonical on-chain history for
+    // (pool, batch_id) can be consumed.
     let (batch_id, clearing_prices, total_in, total_out, fee_bps) = {
         let data = history_ai.try_borrow_data()?;
         let hist = unsafe { load::<ClearedBatchHistory3>(&data) }
@@ -69,10 +74,19 @@ pub fn process_claim_3(program_id: &Pubkey, accounts: &[AccountInfo]) -> Program
         if &hist.pool != pool_key.as_ref() {
             return Err(Pfda3Error::PoolMismatch.into());
         }
+        let batch_id_bytes = hist.batch_id.to_le_bytes();
+        let (expected_history, _) = pubkey::find_program_address(
+            &[b"history3", pool_key.as_ref(), &batch_id_bytes],
+            program_id,
+        );
+        if history_ai.key() != &expected_history {
+            return Err(Pfda3Error::PdaMismatch.into());
+        }
         (hist.batch_id, hist.clearing_prices, hist.total_in, hist.total_out, hist.fee_bps)
     };
 
-    // Load ticket
+    // Load ticket — same PDA re-derivation. Ticket seeds are
+    // [b"ticket3", pool, user, batch_id].
     let (in_idx, amount_in, out_idx, min_out) = {
         let data = ticket_ai.try_borrow_data()?;
         let ticket = unsafe { load::<UserOrderTicket3>(&data) }
@@ -88,6 +102,14 @@ pub fn process_claim_3(program_id: &Pubkey, accounts: &[AccountInfo]) -> Program
         }
         if &ticket.owner != user.key().as_ref() {
             return Err(Pfda3Error::OwnerMismatch.into());
+        }
+        let ticket_batch_bytes = ticket.batch_id.to_le_bytes();
+        let (expected_ticket, _) = pubkey::find_program_address(
+            &[b"ticket3", pool_key.as_ref(), user.key().as_ref(), &ticket_batch_bytes],
+            program_id,
+        );
+        if ticket_ai.key() != &expected_ticket {
+            return Err(Pfda3Error::PdaMismatch.into());
         }
 
         // Find which token was deposited

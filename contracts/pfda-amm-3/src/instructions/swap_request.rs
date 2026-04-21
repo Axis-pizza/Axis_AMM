@@ -59,7 +59,10 @@ pub fn process_swap_request_3(
             return Err(Pfda3Error::ReentrancyDetected.into());
         }
         if pool.paused != 0 {
-            return Err(Pfda3Error::InvalidDiscriminator.into()); // pool is paused
+            // #33: was InvalidDiscriminator — mis-surfacing a pause as a
+            // discriminator error confused operators in logs. Return
+            // the dedicated PoolPaused code instead.
+            return Err(Pfda3Error::PoolPaused.into());
         }
         // Security rule 7: verify vault mint matches pool token
         crate::security::verify_token_account_mint(vault, &pool.token_mints[in_token_idx as usize])?;

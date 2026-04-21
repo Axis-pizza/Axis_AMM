@@ -22,6 +22,8 @@ pub enum VaultError {
     NavDeviationExceeded = 9016,
     TreasuryMismatch = 9017,
     InsufficientFirstDeposit = 9018,
+    InvalidTicker = 9019,
+    InvalidName = 9020,
 }
 
 impl From<VaultError> for ProgramError {

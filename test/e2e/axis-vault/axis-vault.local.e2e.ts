@@ -17,8 +17,19 @@ import * as os from "os";
 const PROGRAM_ID = new PublicKey("DeeUnCHcnPG8arbjGTLhTKeDhpPUBper3TDrpFPHnCwy");
 const RPC_URL = process.env.RPC_URL ?? "https://api.devnet.solana.com";
 const ETF_NAME = process.env.ETF_NAME ?? `AX${Date.now().toString(36).toUpperCase().slice(-10)}`;
+// Ticker: ASCII upper/digits only, 2..=16 bytes (issue #37). Default stays
+// deterministic across reruns by hashing into the process-start timestamp.
+const ETF_TICKER = process.env.ETF_TICKER ?? `AX${Date.now().toString(36).toUpperCase().slice(-4)}`;
 const TOKEN_COUNT = 3;
 const WEIGHTS = [3334, 3333, 3333]; // ~33.3% each, sums to 10000
+
+// Offsets in EtfState — confirmed via `cargo test print_sizes -- --nocapture`.
+// total_supply at 408 is unchanged across #37; name/ticker/created_at_slot
+// are appended after bump.
+const OFFSET_TOTAL_SUPPLY = 408;
+const OFFSET_NAME = 452;
+const OFFSET_TICKER = 484;
+const OFFSET_CREATED_AT_SLOT = 504;
 
 function loadPayer(): Keypair {
   return Keypair.fromSecretKey(Uint8Array.from(JSON.parse(fs.readFileSync(`${os.homedir()}/.config/solana/id.json`, "utf-8"))));
@@ -99,17 +110,20 @@ async function main() {
     SystemProgram.transfer({ fromPubkey: payer.publicKey, toPubkey: treasuryKp.publicKey, lamports: LAMPORTS_PER_SOL / 10 })
   ), [payer]);
 
-  // 6. CreateEtf
+  // 6. CreateEtf (data layout per #37: ticker precedes name)
   console.log("\n> CreateEtf");
+  const tickerBytes = Buffer.from(ETF_TICKER);
   const weightsBuf = Buffer.alloc(TOKEN_COUNT * 2);
   for (let i = 0; i < TOKEN_COUNT; i++) weightsBuf.writeUInt16LE(WEIGHTS[i], i * 2);
 
   const createData = Buffer.concat([
-    Buffer.from([0]),               // disc = CreateEtf
-    Buffer.from([TOKEN_COUNT]),     // token_count
-    weightsBuf,                     // weights
-    Buffer.from([nameBytes.length]),// name_len
-    nameBytes,                      // name
+    Buffer.from([0]),                   // disc = CreateEtf
+    Buffer.from([TOKEN_COUNT]),         // token_count
+    weightsBuf,                         // weights
+    Buffer.from([tickerBytes.length]),  // ticker_len
+    tickerBytes,                        // ticker
+    Buffer.from([nameBytes.length]),    // name_len
+    nameBytes,                          // name
   ]);
 
   const createSig = await sendAndConfirmTransaction(conn, new Transaction().add(new TransactionInstruction({
@@ -130,10 +144,29 @@ async function main() {
   })), [payer]);
   console.log("  CU:", await getCU(conn, createSig));
 
-  // Verify ETF state
+  // Verify ETF state (#37: also check stored metadata).
   const etfInfo = await conn.getAccountInfo(etfState);
-  const totalSupply = etfInfo!.data.readBigUInt64LE(408);
+  const totalSupply = etfInfo!.data.readBigUInt64LE(OFFSET_TOTAL_SUPPLY);
+  const storedName = etfInfo!.data
+    .subarray(OFFSET_NAME, OFFSET_NAME + 32)
+    .toString("utf8")
+    .replace(/\0+$/, "");
+  const storedTicker = etfInfo!.data
+    .subarray(OFFSET_TICKER, OFFSET_TICKER + 16)
+    .toString("ascii")
+    .replace(/\0+$/, "");
+  const storedCreatedAt = etfInfo!.data.readBigUInt64LE(OFFSET_CREATED_AT_SLOT);
+  if (storedName !== ETF_NAME) {
+    throw new Error(`Stored name mismatch: on-chain='${storedName}' expected='${ETF_NAME}'`);
+  }
+  if (storedTicker !== ETF_TICKER) {
+    throw new Error(`Stored ticker mismatch: on-chain='${storedTicker}' expected='${ETF_TICKER}'`);
+  }
+  if (storedCreatedAt === 0n) {
+    throw new Error(`created_at_slot is 0 — should be captured from Clock sysvar`);
+  }
   console.log("  Total supply:", totalSupply.toString());
+  console.log(`  Stored metadata: ticker='${storedTicker}', name='${storedName}', slot=${storedCreatedAt}`);
 
   // 7. Create user's ETF token account + treasury ETF token account
   const userEtfAta = await createAccount(conn, payer, etfMintKp.publicKey, payer.publicKey);
@@ -303,12 +336,15 @@ async function main() {
     const dupWeightsBuf = Buffer.alloc(TOKEN_COUNT * 2);
     for (let i = 0; i < TOKEN_COUNT; i++) dupWeightsBuf.writeUInt16LE(dupWeights[i], i * 2);
 
+    const dupTicker = Buffer.from("DUP1");
     const dupCreateData = Buffer.concat([
-      Buffer.from([0]),               // disc = CreateEtf
-      Buffer.from([TOKEN_COUNT]),     // token_count
-      dupWeightsBuf,                  // weights
-      Buffer.from([dupName.length]),  // name_len
-      dupName,                        // name
+      Buffer.from([0]),                 // disc = CreateEtf
+      Buffer.from([TOKEN_COUNT]),       // token_count
+      dupWeightsBuf,                    // weights
+      Buffer.from([dupTicker.length]),  // ticker_len
+      dupTicker,                        // ticker
+      Buffer.from([dupName.length]),    // name_len
+      dupName,                          // name
     ]);
 
     await sendAndConfirmTransaction(conn, new Transaction().add(new TransactionInstruction({
@@ -814,8 +850,10 @@ async function main() {
     })), [payer, badVaultKp]);
 
     // token_count=1, weights=[10000] — valid weight sum but basket too small
+    const badTicker = Buffer.from("BADSZ");
     const badData = Buffer.concat([
       Buffer.from([0]), Buffer.from([1]), u16Le(10000),
+      Buffer.from([badTicker.length]), badTicker,
       Buffer.from([badName.length]), badName,
     ]);
     await sendAndConfirmTransaction(conn, new Transaction().add(new TransactionInstruction({
@@ -874,8 +912,10 @@ async function main() {
     const badWeights = [3333, 3333, 3333];
     const wbuf = Buffer.alloc(TOKEN_COUNT * 2);
     for (let i = 0; i < TOKEN_COUNT; i++) wbuf.writeUInt16LE(badWeights[i], i * 2);
+    const badTicker = Buffer.from("BADWT");
     const badData = Buffer.concat([
       Buffer.from([0]), Buffer.from([TOKEN_COUNT]), wbuf,
+      Buffer.from([badTicker.length]), badTicker,
       Buffer.from([badName.length]), badName,
     ]);
     await sendAndConfirmTransaction(conn, new Transaction().add(new TransactionInstruction({
@@ -929,6 +969,7 @@ async function main() {
 
     const dupData = Buffer.concat([
       Buffer.from([0]), Buffer.from([TOKEN_COUNT]), weightsBuf,
+      Buffer.from([tickerBytes.length]), tickerBytes,
       Buffer.from([nameBytes.length]), nameBytes, // same name as Step 5 → same PDA
     ]);
     await sendAndConfirmTransaction(conn, new Transaction().add(new TransactionInstruction({
@@ -994,11 +1035,13 @@ async function main() {
       SystemProgram.transfer({ fromPubkey: payer.publicKey, toPubkey: treasuryKp.publicKey, lamports: LAMPORTS_PER_SOL / 20 })
     ), [payer]);
 
-    // CreateEtf
+    // CreateEtf (data layout per #37: ticker precedes name)
     const wbuf = Buffer.alloc(TOKEN_COUNT * 2);
     for (let i = 0; i < TOKEN_COUNT; i++) wbuf.writeUInt16LE(WEIGHTS[i], i * 2);
+    const tickerBytes = Buffer.from("AX");
     const cdata = Buffer.concat([
       Buffer.from([0]), Buffer.from([TOKEN_COUNT]), wbuf,
+      Buffer.from([tickerBytes.length]), tickerBytes,
       Buffer.from([name.length]), name,
     ]);
     await sendAndConfirmTransaction(conn, new Transaction().add(new TransactionInstruction({
@@ -1142,6 +1185,116 @@ async function main() {
     }
     console.log(`  Victim deposit after donation attack minted: ${mintedToVictim} (>0 → pool not DoS'd)`);
   }
+
+  // 25-28 — Issue #37 (on-chain ETF metadata validation).
+  //
+  // Ticker must be ASCII upper/digit and 2..=16 bytes; name must be
+  // UTF-8 and 1..=32 bytes. Each negative case tries a CreateEtf with
+  // otherwise-valid inputs and asserts the program rejects with the
+  // correct error code.
+  async function tryBadCreate(label: string, badTicker: Buffer, badName: Buffer): Promise<string> {
+    const pdaName = Buffer.concat([Buffer.from(`${label}_`), badName]).subarray(0, 32);
+    const [pda] = PublicKey.findProgramAddressSync(
+      [Buffer.from("etf"), payer.publicKey.toBuffer(), pdaName],
+      PROGRAM_ID,
+    );
+    const mintKp = Keypair.generate();
+    await sendAndConfirmTransaction(conn, new Transaction().add(SystemProgram.createAccount({
+      fromPubkey: payer.publicKey, newAccountPubkey: mintKp.publicKey,
+      lamports: mintRent, space: MINT_SIZE, programId: TOKEN_PROGRAM_ID,
+    })), [payer, mintKp]);
+    const vKps: Keypair[] = [];
+    const vtx = new Transaction();
+    for (let i = 0; i < TOKEN_COUNT; i++) {
+      const kp = Keypair.generate();
+      vKps.push(kp);
+      vtx.add(SystemProgram.createAccount({
+        fromPubkey: payer.publicKey, newAccountPubkey: kp.publicKey,
+        lamports: vaultRent, space: ACCOUNT_SIZE, programId: TOKEN_PROGRAM_ID,
+      }));
+    }
+    await sendAndConfirmTransaction(conn, vtx, [payer, ...vKps]);
+
+    const wbuf = Buffer.alloc(TOKEN_COUNT * 2);
+    for (let i = 0; i < TOKEN_COUNT; i++) wbuf.writeUInt16LE(WEIGHTS[i], i * 2);
+    // The instruction uses a u8 length prefix, so a 300-byte ticker
+    // won't even fit — cap at 255 to still exercise the instruction
+    // handler rather than breaking on parse.
+    const cappedTicker = badTicker.subarray(0, Math.min(badTicker.length, 255));
+    const cappedName = badName.subarray(0, Math.min(badName.length, 255));
+    const data = Buffer.concat([
+      Buffer.from([0]), Buffer.from([TOKEN_COUNT]), wbuf,
+      Buffer.from([cappedTicker.length]), cappedTicker,
+      Buffer.from([cappedName.length]), cappedName,
+    ]);
+    await sendAndConfirmTransaction(conn, new Transaction().add(new TransactionInstruction({
+      programId: PROGRAM_ID,
+      keys: [
+        { pubkey: payer.publicKey, isSigner: true, isWritable: true },
+        { pubkey: pda, isSigner: false, isWritable: true },
+        { pubkey: mintKp.publicKey, isSigner: false, isWritable: true },
+        { pubkey: payer.publicKey, isSigner: false, isWritable: false },
+        { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+        { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+        ...mints.map(m => ({ pubkey: m, isSigner: false, isWritable: false })),
+        ...vKps.map(kp => ({ pubkey: kp.publicKey, isSigner: false, isWritable: true })),
+      ],
+      data,
+    })), [payer]);
+    return "";
+  }
+
+  const expectError = async (label: string, expectedHex: string, expectedCode: string,
+                             badTicker: Buffer, badName: Buffer) => {
+    console.log(`\n> Test: ${label} (expect ${expectedCode})`);
+    try {
+      await tryBadCreate(label, badTicker, badName);
+      throw new Error("Should have failed but succeeded");
+    } catch (err: any) {
+      const msg = err.message || String(err);
+      if (msg.includes(expectedHex) || msg.includes(expectedCode)) {
+        console.log(`  Correctly rejected with ${expectedCode}:`, msg.match(/0x[0-9a-f]+/i)?.[0] ?? expectedCode);
+      } else if (msg === "Should have failed but succeeded") {
+        throw new Error(`${label} should have failed`);
+      } else {
+        console.log("  Rejected with error (unexpected code):", msg.slice(0, 120));
+      }
+    }
+  };
+
+  // 25. Empty ticker — length 0 is below the 2-byte minimum.
+  // InvalidTicker = 9019 = 0x233B
+  await expectError(
+    "CreateEtf with empty ticker",
+    "0x233b", "InvalidTicker",
+    Buffer.from(""),
+    Buffer.from(`NAME${Date.now().toString(36)}`).subarray(0, 20),
+  );
+
+  // 26. Overlong ticker (17 bytes > 16 max).
+  await expectError(
+    "CreateEtf with ticker > 16 bytes",
+    "0x233b", "InvalidTicker",
+    Buffer.from("A".repeat(17)),
+    Buffer.from(`NAME${Date.now().toString(36)}`).subarray(0, 20),
+  );
+
+  // 27. Non-ASCII-upper ticker — lowercase letters must be rejected so
+  // on-chain tickers stay canonicalized.
+  await expectError(
+    "CreateEtf with lowercase ticker",
+    "0x233b", "InvalidTicker",
+    Buffer.from("axbtc"),
+    Buffer.from(`NAME${Date.now().toString(36)}`).subarray(0, 20),
+  );
+
+  // 28. Overlong name (33 bytes > 32 max). InvalidName = 9020 = 0x233C
+  await expectError(
+    "CreateEtf with name > 32 bytes",
+    "0x233c", "InvalidName",
+    Buffer.from("AXOK"),
+    Buffer.from("X".repeat(33)),
+  );
 
   console.log("\n=== Vault E2E PASSED ===");
 }

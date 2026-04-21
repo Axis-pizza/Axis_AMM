@@ -19,6 +19,14 @@ path = "tests/close_delay.rs"
 name = "scenario_coverage"
 path = "tests/scenario_coverage.rs"
 
+[[test]]
+name = "pfda_amm_coverage"
+path = "tests/pfda_amm_coverage.rs"
+
+[[test]]
+name = "axis_g3m_coverage"
+path = "tests/axis_g3m_coverage.rs"
+
 [dependencies]
 litesvm = "0.11"
 solana-keypair = "3.1"

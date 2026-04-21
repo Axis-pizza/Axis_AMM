@@ -4,6 +4,8 @@ use solana_clock::Clock;
 
 pub const AXIS_G3M_ID: &str = "65aE9QdVz5bapV19BGt5cyTgVitYpekGwusRoQEovNUi";
 pub const PFDA_AMM_3_ID: &str = "DbAPmgkrpCCZrpBMv5x1ye6nJUreqY313SuQjZsMyjEf";
+pub const PFDA_AMM_ID: &str = "CSBgQGeBTiAu4a9Kgoas2GyR8wbHg5jxctQjq3AenKk";
+pub const AXIS_VAULT_ID: &str = "DeeUnCHcnPG8arbjGTLhTKeDhpPUBper3TDrpFPHnCwy";
 pub const JUPITER_V6_ID: &str = "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4";
 
 pub const AXIS_G3M_SO: &str = concat!(
@@ -13,6 +15,14 @@ pub const AXIS_G3M_SO: &str = concat!(
 pub const PFDA_AMM_3_SO: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../pfda-amm-3/target/deploy/pfda_amm_3.so"
+);
+pub const PFDA_AMM_SO: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../pfda-amm/target/deploy/pfda_amm.so"
+);
+pub const AXIS_VAULT_SO: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../axis-vault/target/deploy/axis_vault.so"
 );
 pub const JUPITER_V6_SO: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -34,6 +44,12 @@ pub fn axis_g3m_id() -> Address {
 }
 pub fn pfda3_id() -> Address {
     PFDA_AMM_3_ID.parse().unwrap()
+}
+pub fn pfda_amm_id() -> Address {
+    PFDA_AMM_ID.parse().unwrap()
+}
+pub fn axis_vault_id() -> Address {
+    AXIS_VAULT_ID.parse().unwrap()
 }
 pub fn jupiter_id() -> Address {
     JUPITER_V6_ID.parse().unwrap()

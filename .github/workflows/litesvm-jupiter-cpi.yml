@@ -61,10 +61,14 @@ jobs:
         run: bun run typecheck 2>&1 || true
 
       # ── Build SBF programs ──
+      # pfda-amm is now exercised by tests/pfda_amm_coverage.rs in the
+      # ab-integration-tests crate, so build its .so alongside the g3m
+      # and pfda-amm-3 binaries the existing test suite loads.
       - name: Build SBF programs
         run: |
           cd contracts/axis-g3m && cargo build-sbf
           cd ../pfda-amm-3 && cargo build-sbf
+          cd ../pfda-amm && cargo build-sbf
 
       - name: Dump Jupiter V6 from mainnet
         run: |
@@ -98,6 +102,22 @@ jobs:
         run: |
           cd contracts/ab-integration-tests
           cargo test --test scenario_coverage -- --nocapture
+
+      # pfda-amm (legacy 2-token) — CloseBatchHistory/CloseExpiredTicket
+      # success + rejection, AddLiquidity paused/wrong-vault,
+      # SwapRequest duplicate-same-batch atomicity (PR #50 reorder).
+      - name: Run pfda-amm regression tests (LiteSVM)
+        run: |
+          cd contracts/ab-integration-tests
+          cargo test --test pfda_amm_coverage -- --nocapture
+
+      # axis-g3m — Swap slippage/zero/same-idx/paused, Rebalance cooldown +
+      # wrong authority, InitializePool invalid-token-count / weights-mismatch /
+      # duplicate-init.
+      - name: Run axis-g3m regression tests (LiteSVM)
+        run: |
+          cd contracts/ab-integration-tests
+          cargo test --test axis_g3m_coverage -- --nocapture
 
       - name: Generate LiteSVM A/B report
         run: |

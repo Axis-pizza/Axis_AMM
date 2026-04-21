@@ -47,6 +47,8 @@ pub enum G3mError {
     Unauthorized = 7020,
     /// CPI target is not the Jupiter V6 program
     InvalidProgram = 7021,
+    /// Rebalance attestation mode requires the Jupiter program account (#33)
+    AttestationRequiresJupiter = 7022,
 }
 
 impl From<G3mError> for ProgramError {

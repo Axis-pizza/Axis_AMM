@@ -117,7 +117,27 @@ pub fn process_rebalance(
             actual_reserves[i] = read_vault_balance(vault_account)?;
         }
     } else if new_reserves.len() == tc {
-        // Attestation mode: trust authority-provided reserves with stricter validation
+        // Attestation mode: trust authority-provided reserves with stricter validation.
+        //
+        // #33: attestation mode previously kicked in whenever vault
+        // accounts were omitted — no explicit opt-in, no additional
+        // witness. Tighten the gate by requiring the authority to
+        // also pass the Jupiter V6 program account (which is how any
+        // real attestation ends up wired into the broader protocol).
+        // This turns attestation from an implicit fallback into a
+        // deliberate, Jupiter-coordinated rebalance.
+        //
+        // Layout: [authority, pool, jupiter_program]. Jupiter lives at
+        // index 2 — immediately after pool_pda — because attestation
+        // mode by construction means no vault slots were provided, so
+        // `2 + tc` (the trustless-mode Jupiter slot) is always past
+        // the end of `accounts` and can never be reached.
+        let jupiter_account_idx = 2;
+        if accounts.len() <= jupiter_account_idx {
+            return Err(G3mError::AttestationRequiresJupiter.into());
+        }
+        verify_jupiter_program(&accounts[jupiter_account_idx])?;
+
         for i in 0..tc {
             actual_reserves[i] = new_reserves[i];
         }
@@ -149,9 +169,11 @@ pub fn process_rebalance(
         return Err(G3mError::InvalidTokenCount.into());
     }
 
-    // If a Jupiter program account is provided, validate it
+    // (Trustless mode) If a Jupiter program account is provided,
+    // validate it. Attestation mode's check runs earlier and is
+    // mandatory per the #33 hardening.
     let jupiter_account_idx = 2 + tc;
-    if accounts.len() > jupiter_account_idx {
+    if !attestation_mode && accounts.len() > jupiter_account_idx {
         verify_jupiter_program(&accounts[jupiter_account_idx])?;
     }
 

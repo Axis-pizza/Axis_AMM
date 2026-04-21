@@ -122,6 +122,11 @@ fn g3m_rebalance_ix(
         accounts: vec![
             AccountMeta::new(authority, true),
             AccountMeta::new(pool_pda, false),
+            // #33: attestation mode requires the Jupiter V6 program
+            // account as a witness at index 2. The program only
+            // checks the pubkey, so a readonly meta is sufficient —
+            // the Jupiter .so doesn't need to be loaded into the SVM.
+            AccountMeta::new_readonly(jupiter_id(), false),
         ],
         data,
     }

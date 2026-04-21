@@ -558,3 +558,195 @@ fn init_rejects_duplicate() {
     .expect("duplicate init should reject");
     assert_custom_err(&err, ERR_ALREADY_INITIALIZED, "duplicate init");
 }
+
+// ─── Rebalance >50% attestation reserve-change cap ─────────────────────
+
+const ERR_RESERVE_CHANGE_EXCEEDED: u32 = 7019;
+const ERR_ATTESTATION_REQUIRES_JUPITER: u32 = 7022;
+
+#[test]
+fn rebalance_attestation_rejects_over_50pct_reserve_change() {
+    require_fixture!(AXIS_G3M_SO);
+    // Attestation mode requires Jupiter V6 loaded in the SVM — skip
+    // when the fork fixture isn't present.
+    if !std::path::Path::new(JUPITER_V6_SO).exists() {
+        eprintln!("SKIP: jupiter_v6.so fixture missing");
+        return;
+    }
+
+    let Fixture { mut svm, payer, pool, .. } =
+        match init_pool(0) { Some(f) => f, None => return };
+
+    svm.add_program_from_file(jupiter_id(), JUPITER_V6_SO).unwrap();
+
+    // Force the pool into a drifted state so `needs_rebalance()` fires,
+    // then drop the drift threshold to 1 bp so any drift qualifies.
+    // Layout offsets (verified via offset_of! probe):
+    //   reserves[0]             @ 376  (u64)
+    //   drift_threshold_bps     @ 434  (u16)
+    //   max_invariant_drift_bps @ 436  (u16)
+    {
+        let mut acc = svm.get_account(&pool).unwrap();
+        acc.data[376..384].copy_from_slice(&9_000_000u64.to_le_bytes()); // reserve_0 → 9M
+        acc.data[434..436].copy_from_slice(&1u16.to_le_bytes());         // drift_threshold = 1 bp
+        acc.data[436..438].copy_from_slice(&10_000u16.to_le_bytes());    // max invariant drift = 100%
+        svm.set_account(pool, acc).unwrap();
+    }
+
+    // Attestation-mode Rebalance: authority + pool + jupiter_program
+    // (exactly 3 accounts — no vault slots). Reserve 0 drops from 9M
+    // to 3M (~66.7% change), well past the 5000-bp (50%) cap.
+    let mut data = vec![3u8];
+    data.extend_from_slice(&3_000_000u64.to_le_bytes());
+    data.extend_from_slice(&10_000_000u64.to_le_bytes());
+
+    let err = send(
+        &mut svm,
+        Instruction {
+            program_id: axis_g3m_id(),
+            accounts: vec![
+                AccountMeta::new(payer.pubkey(), true),
+                AccountMeta::new(pool, false),
+                AccountMeta::new_readonly(jupiter_id(), false),
+            ],
+            data,
+        },
+        &payer,
+    )
+    .err()
+    .expect("over-50% attestation reserve change should reject");
+    assert_custom_err(&err, ERR_RESERVE_CHANGE_EXCEEDED, ">50% change");
+}
+
+#[test]
+fn rebalance_attestation_rejects_missing_jupiter() {
+    // PR #48's #33 hardening: attestation mode now requires the
+    // Jupiter V6 program account as an explicit opt-in. Sending
+    // attestation-mode accounts without Jupiter should return
+    // AttestationRequiresJupiter.
+    //
+    // The Jupiter check happens after `needs_rebalance()`, so the pool
+    // must first be in a drifted state; otherwise DriftBelowThreshold
+    // fires first.
+    require_fixture!(AXIS_G3M_SO);
+    let Fixture { mut svm, payer, pool, .. } =
+        match init_pool(0) { Some(f) => f, None => return };
+
+    // Force drift — same byte-level tweak as the >50% test.
+    {
+        let mut acc = svm.get_account(&pool).unwrap();
+        acc.data[376..384].copy_from_slice(&9_000_000u64.to_le_bytes());
+        acc.data[434..436].copy_from_slice(&1u16.to_le_bytes());
+        svm.set_account(pool, acc).unwrap();
+    }
+
+    let mut data = vec![3u8];
+    data.extend_from_slice(&10_000_000u64.to_le_bytes());
+    data.extend_from_slice(&10_000_000u64.to_le_bytes());
+
+    let err = send(
+        &mut svm,
+        Instruction {
+            program_id: axis_g3m_id(),
+            accounts: vec![
+                AccountMeta::new(payer.pubkey(), true),
+                AccountMeta::new(pool, false),
+                // no jupiter_program — attestation mode detected but
+                // Jupiter opt-in missing.
+            ],
+            data,
+        },
+        &payer,
+    )
+    .err()
+    .expect("missing jupiter should reject");
+    assert_custom_err(
+        &err,
+        ERR_ATTESTATION_REQUIRES_JUPITER,
+        "attestation requires jupiter",
+    );
+}
+
+// ─── RebalanceViaJupiter rejection paths (#33) ─────────────────────────
+
+const ERR_DRIFT_BELOW_THRESHOLD: u32 = 7008;
+
+fn rebalance_via_jupiter_ix(
+    authority: Address,
+    pool: Address,
+    jupiter_program: Address,
+    vaults: &[Address],
+    jupiter_data: Vec<u8>,
+) -> Instruction {
+    let mut data = vec![4u8]; // RebalanceViaJupiter
+    let len = jupiter_data.len() as u32;
+    data.extend_from_slice(&len.to_le_bytes());
+    data.extend_from_slice(&jupiter_data);
+
+    let mut accts = vec![
+        AccountMeta::new(authority, true),
+        AccountMeta::new(pool, false),
+        AccountMeta::new_readonly(jupiter_program, false),
+    ];
+    for v in vaults {
+        accts.push(AccountMeta::new(*v, false));
+    }
+    Instruction { program_id: axis_g3m_id(), accounts: accts, data }
+}
+
+#[test]
+fn rebalance_via_jupiter_rejects_wrong_program_id() {
+    require_fixture!(AXIS_G3M_SO);
+    let Fixture { mut svm, payer, pool, vaults, .. } =
+        match init_pool(0) { Some(f) => f, None => return };
+
+    // Pass a wrong pubkey for the Jupiter program slot. The gate fires
+    // with `IncorrectProgramId` (builtin program error, code 0xF) —
+    // it's not a custom code, it's a ProgramError variant.
+    let wrong_program = Address::new_unique();
+
+    let err = send(
+        &mut svm,
+        rebalance_via_jupiter_ix(
+            payer.pubkey(), pool, wrong_program, &vaults,
+            // Dummy route bytes — we never reach the CPI.
+            vec![0u8; 16],
+        ),
+        &payer,
+    )
+    .err()
+    .expect("wrong Jupiter program should reject");
+    assert!(
+        err.contains("IncorrectProgramId") || err.contains("0xf"),
+        "expected IncorrectProgramId, got: {err}"
+    );
+}
+
+#[test]
+fn rebalance_via_jupiter_rejects_below_drift() {
+    require_fixture!(AXIS_G3M_SO);
+    // Pool is freshly init'd with matching reserves + weights — no
+    // drift. RebalanceViaJupiter should reject with DriftBelowThreshold
+    // before reaching the Jupiter CPI, since the hardened (PR #48) path
+    // explicitly validates drift first on both Rebalance and
+    // RebalanceViaJupiter.
+    let Fixture { mut svm, payer, pool, vaults, .. } =
+        match init_pool(0) { Some(f) => f, None => return };
+
+    // We don't have a real Jupiter fixture here — and we don't need
+    // one, because the drift check fires before the CPI. Pass the
+    // canonical Jupiter V6 program id; the program-id check only
+    // validates `program_account.key() == JUPITER_PROGRAM_ID`, not
+    // executability.
+    let err = send(
+        &mut svm,
+        rebalance_via_jupiter_ix(
+            payer.pubkey(), pool, jupiter_id(), &vaults,
+            vec![0u8; 16],
+        ),
+        &payer,
+    )
+    .err()
+    .expect("below-drift RebalanceViaJupiter should reject");
+    assert_custom_err(&err, ERR_DRIFT_BELOW_THRESHOLD, "below drift");
+}

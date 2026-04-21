@@ -554,3 +554,429 @@ fn read_token_amount(svm: &LiteSVM, addr: &Address) -> u64 {
     let acc = svm.get_account(addr).expect("token account");
     u64::from_le_bytes(acc.data[64..72].try_into().unwrap())
 }
+
+// ─── Additional scenario rows from kidney's #33 table ──────────────────
+
+const ERR_INVALID_WEIGHT: u32 = 6009;
+const ERR_INVALID_WINDOW_SLOTS: u32 = 6014;
+const ERR_ALREADY_INITIALIZED: u32 = 6015;
+const ERR_UNAUTHORIZED: u32 = 6016;
+const ERR_INVALID_FEE_BPS: u32 = 6019;
+const ERR_SLIPPAGE_EXCEEDED: u32 = 6006;
+const ERR_TICKET_ALREADY_CLAIMED: u32 = 6004;
+
+// pfda_amm SwapRequest wrong vault — companion to the AddLiquidity
+// wrong-vault test. Kidney called out both instructions in the same row.
+#[test]
+fn pfda_swap_request_rejects_wrong_vault() {
+    require_fixture!(PFDA_AMM_SO);
+    let Fixture {
+        mut svm, payer, pool, mint_a, mint_b: _, vault_a: _, vault_b,
+        user_tok_a, user_tok_b,
+    } = match seed(0, false) { Some(f) => f, None => return };
+
+    let rogue = Address::new_unique();
+    create_token_account(&mut svm, rogue, &mint_a, &pool, 0);
+
+    let queue = seed_queue(&mut svm, pool, 0, 100);
+    let (ticket, _) = Address::find_program_address(
+        &[b"ticket", pool.as_ref(), payer.pubkey().as_ref(), &0u64.to_le_bytes()],
+        &pfda_amm_id(),
+    );
+
+    let err = send(
+        &mut svm,
+        pfda_swap_request_ix(
+            pfda_amm_id(), payer.pubkey(), pool, queue, ticket,
+            user_tok_a, user_tok_b, rogue, vault_b,
+            1000, 0,
+        ),
+        &payer,
+    )
+    .err()
+    .expect("wrong-vault SwapRequest should reject");
+    assert_custom_err(&err, 6020 /* VaultMismatch */, "swap_request wrong vault");
+}
+
+// ─── UpdateWeight ─────────────────────────────────────────────────────
+
+fn pfda_update_weight_ix(
+    program: Address,
+    authority: Address,
+    pool: Address,
+    target_weight_a: u32,
+    weight_end_slot: u64,
+) -> Instruction {
+    let mut data = vec![5u8]; // UpdateWeight
+    data.extend_from_slice(&target_weight_a.to_le_bytes());
+    data.extend_from_slice(&weight_end_slot.to_le_bytes());
+    Instruction {
+        program_id: program,
+        accounts: vec![
+            AccountMeta::new_readonly(authority, true),
+            AccountMeta::new(pool, false),
+        ],
+        data,
+    }
+}
+
+#[test]
+fn pfda_update_weight_rejects_out_of_range() {
+    require_fixture!(PFDA_AMM_SO);
+    // target_weight_a > 1_000_000 is the #5-fixed upper bound.
+    let Fixture { mut svm, payer, pool, .. } =
+        match seed(0, false) { Some(f) => f, None => return };
+
+    let err = send(
+        &mut svm,
+        pfda_update_weight_ix(pfda_amm_id(), payer.pubkey(), pool, 1_000_001, 1_000_000),
+        &payer,
+    )
+    .err()
+    .expect("out-of-range target_weight should reject");
+    assert_custom_err(&err, ERR_INVALID_WEIGHT, "weight out of range");
+}
+
+#[test]
+fn pfda_update_weight_rejects_past_end_slot() {
+    require_fixture!(PFDA_AMM_SO);
+    // weight_end_slot <= current_slot → InvalidWindowSlots.
+    // LiteSVM's initial clock slot is 0 unless warped, so end_slot = 0
+    // triggers the `<=` branch.
+    let Fixture { mut svm, payer, pool, .. } =
+        match seed(0, false) { Some(f) => f, None => return };
+
+    let err = send(
+        &mut svm,
+        pfda_update_weight_ix(pfda_amm_id(), payer.pubkey(), pool, 500_000, 0),
+        &payer,
+    )
+    .err()
+    .expect("past end_slot should reject");
+    assert_custom_err(&err, ERR_INVALID_WINDOW_SLOTS, "past end slot");
+}
+
+#[test]
+fn pfda_update_weight_rejects_wrong_authority() {
+    require_fixture!(PFDA_AMM_SO);
+    // pool.authority = payer; intruder is a different signer.
+    let Fixture { mut svm, pool, .. } =
+        match seed(0, false) { Some(f) => f, None => return };
+
+    let intruder = Keypair::new();
+    svm.airdrop(&intruder.pubkey(), LAMPORTS_PER_SOL).unwrap();
+
+    let err = send(
+        &mut svm,
+        pfda_update_weight_ix(pfda_amm_id(), intruder.pubkey(), pool, 500_000, 1_000_000),
+        &intruder,
+    )
+    .err()
+    .expect("wrong-authority UpdateWeight should reject");
+    assert_custom_err(&err, ERR_UNAUTHORIZED, "wrong authority");
+}
+
+// ─── InitializePool validation-only rejections ─────────────────────────
+// We only exercise the pre-account-setup branches — base_fee_bps >= 10_000
+// fires at ix-data validation, before any CreateAccount, so an empty
+// accounts fixture is enough.
+
+fn pfda_init_ix_empty_accounts(
+    payer: &Keypair,
+    program: Address,
+    base_fee_bps: u16,
+    window_slots: u64,
+    weight_a: u32,
+) -> Instruction {
+    let mut data = vec![0u8]; // InitializePool
+    data.extend_from_slice(&base_fee_bps.to_le_bytes());
+    data.extend_from_slice(&0u16.to_le_bytes()); // fee_discount_bps
+    data.extend_from_slice(&window_slots.to_le_bytes());
+    data.extend_from_slice(&weight_a.to_le_bytes());
+
+    // Nine accounts, mostly fresh System-owned — the rejection fires
+    // before anything is read.
+    let accts = [
+        AccountMeta::new(payer.pubkey(), true),
+        AccountMeta::new(Address::new_unique(), false),
+        AccountMeta::new(Address::new_unique(), false),
+        AccountMeta::new_readonly(Address::new_unique(), false),
+        AccountMeta::new_readonly(Address::new_unique(), false),
+        AccountMeta::new(Address::new_unique(), false),
+        AccountMeta::new(Address::new_unique(), false),
+        AccountMeta::new_readonly(system_program_id(), false),
+        AccountMeta::new_readonly(token_program_id(), false),
+    ];
+    Instruction { program_id: program, accounts: accts.to_vec(), data }
+}
+
+#[test]
+fn pfda_init_rejects_fee_100_percent() {
+    require_fixture!(PFDA_AMM_SO);
+    let mut svm = LiteSVM::new();
+    if !std::path::Path::new(PFDA_AMM_SO).exists() { return; }
+    svm.add_program_from_file(pfda_amm_id(), PFDA_AMM_SO).unwrap();
+    let payer = Keypair::new();
+    svm.airdrop(&payer.pubkey(), LAMPORTS_PER_SOL).unwrap();
+
+    let err = send(
+        &mut svm,
+        pfda_init_ix_empty_accounts(&payer, pfda_amm_id(), 10_000, 10, 500_000),
+        &payer,
+    )
+    .err()
+    .expect("base_fee_bps=10_000 should reject");
+    assert_custom_err(&err, ERR_INVALID_FEE_BPS, "fee=100%");
+}
+
+#[test]
+fn pfda_init_rejects_duplicate() {
+    require_fixture!(PFDA_AMM_SO);
+    // Pre-seed the pool PDA with a valid discriminator so the
+    // "already initialized" branch fires. We don't need real accounts
+    // elsewhere — the check happens right after PDA derivation.
+    let Fixture { mut svm, payer, pool, mint_a, mint_b, .. } =
+        match seed(0, false) { Some(f) => f, None => return };
+
+    // Drive init against the already-seeded pool.
+    let mut data = vec![0u8];
+    data.extend_from_slice(&30u16.to_le_bytes());
+    data.extend_from_slice(&0u16.to_le_bytes());
+    data.extend_from_slice(&10u64.to_le_bytes());
+    data.extend_from_slice(&500_000u32.to_le_bytes());
+
+    let batch_queue = Address::new_unique();
+    let vault_a = Address::new_unique();
+    let vault_b = Address::new_unique();
+
+    let err = send(
+        &mut svm,
+        Instruction {
+            program_id: pfda_amm_id(),
+            accounts: vec![
+                AccountMeta::new(payer.pubkey(), true),
+                AccountMeta::new(pool, false),
+                AccountMeta::new(batch_queue, false),
+                AccountMeta::new_readonly(mint_a, false),
+                AccountMeta::new_readonly(mint_b, false),
+                AccountMeta::new(vault_a, false),
+                AccountMeta::new(vault_b, false),
+                AccountMeta::new_readonly(system_program_id(), false),
+                AccountMeta::new_readonly(token_program_id(), false),
+            ],
+            data,
+        },
+        &payer,
+    )
+    .err()
+    .expect("duplicate init should reject");
+    assert_custom_err(&err, ERR_ALREADY_INITIALIZED, "duplicate init");
+}
+
+// ─── Claim double-claim + slippage ─────────────────────────────────────
+// Fabricate a cleared history + ticket, call Claim once (succeeds with
+// slippage or pays out), then call again (TicketAlreadyClaimed).
+
+const Q32_32_ONE: u64 = 1u64 << 32;
+
+fn build_pfda_cleared_batch_history_full(
+    pool: &Address,
+    batch_id: u64,
+    clearing_price: u64,
+    out_b_per_in_a: u64,
+    out_a_per_in_b: u64,
+    bump: u8,
+) -> Vec<u8> {
+    // ClearedBatchHistory (80 bytes):
+    //  0: disc "clrdhist"
+    //  8: pool (32)
+    // 40: batch_id u64
+    // 48: clearing_price u64
+    // 56: out_b_per_in_a u64
+    // 64: out_a_per_in_b u64
+    // 72: is_cleared u8
+    // 73: bump u8
+    // 74: padding [u8;6]
+    let mut d = vec![0u8; 80];
+    d[0..8].copy_from_slice(b"clrdhist");
+    d[8..40].copy_from_slice(pool.as_ref());
+    d[40..48].copy_from_slice(&batch_id.to_le_bytes());
+    d[48..56].copy_from_slice(&clearing_price.to_le_bytes());
+    d[56..64].copy_from_slice(&out_b_per_in_a.to_le_bytes());
+    d[64..72].copy_from_slice(&out_a_per_in_b.to_le_bytes());
+    d[72] = 1;
+    d[73] = bump;
+    d
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_pfda_user_order_ticket_full(
+    owner: &Address,
+    pool: &Address,
+    batch_id: u64,
+    amount_in_a: u64,
+    amount_in_b: u64,
+    min_amount_out: u64,
+    bump: u8,
+) -> Vec<u8> {
+    // UserOrderTicket (112 bytes):
+    //  0: disc "usrorder"
+    //  8: owner (32)
+    // 40: pool (32)
+    // 72: batch_id u64
+    // 80: amount_in_a u64
+    // 88: amount_in_b u64
+    // 96: min_amount_out u64
+    // 104: is_claimed u8
+    // 105: bump u8
+    // 106: padding [u8;6]
+    let mut d = vec![0u8; 112];
+    d[0..8].copy_from_slice(b"usrorder");
+    d[8..40].copy_from_slice(owner.as_ref());
+    d[40..72].copy_from_slice(pool.as_ref());
+    d[72..80].copy_from_slice(&batch_id.to_le_bytes());
+    d[80..88].copy_from_slice(&amount_in_a.to_le_bytes());
+    d[88..96].copy_from_slice(&amount_in_b.to_le_bytes());
+    d[96..104].copy_from_slice(&min_amount_out.to_le_bytes());
+    d[104] = 0; // is_claimed false
+    d[105] = bump;
+    d
+}
+
+#[allow(clippy::too_many_arguments)]
+fn pfda_claim_ix(
+    program: Address,
+    user: Address,
+    pool: Address,
+    history: Address,
+    ticket: Address,
+    vault_a: Address,
+    vault_b: Address,
+    user_tok_a: Address,
+    user_tok_b: Address,
+) -> Instruction {
+    Instruction {
+        program_id: program,
+        accounts: vec![
+            AccountMeta::new_readonly(user, true),
+            AccountMeta::new_readonly(pool, false),
+            AccountMeta::new_readonly(history, false),
+            AccountMeta::new(ticket, false),
+            AccountMeta::new(vault_a, false),
+            AccountMeta::new(vault_b, false),
+            AccountMeta::new(user_tok_a, false),
+            AccountMeta::new(user_tok_b, false),
+            AccountMeta::new_readonly(token_program_id(), false),
+        ],
+        data: vec![3u8], // Claim
+    }
+}
+
+#[test]
+fn pfda_claim_rejects_slippage_exceeded() {
+    require_fixture!(PFDA_AMM_SO);
+    let Fixture { mut svm, payer, pool, vault_a, vault_b, user_tok_a, user_tok_b, .. } =
+        match seed(1, false) { Some(f) => f, None => return };
+
+    // Seed history at batch_id=0 with 1:1 rate (Q32.32 1.0). Ticket
+    // deposited 100 token A, wants ≥ 1_000_000 token B out — impossible.
+    let (hist, hbump) = Address::find_program_address(
+        &[b"history", pool.as_ref(), &0u64.to_le_bytes()],
+        &pfda_amm_id(),
+    );
+    svm.set_account(
+        hist,
+        Account {
+            lamports: 1_500_000,
+            data: build_pfda_cleared_batch_history_full(&pool, 0, Q32_32_ONE, Q32_32_ONE, Q32_32_ONE, hbump),
+            owner: pfda_amm_id(),
+            executable: false,
+            rent_epoch: 0,
+        },
+    ).unwrap();
+
+    let (ticket, tbump) = Address::find_program_address(
+        &[b"ticket", pool.as_ref(), payer.pubkey().as_ref(), &0u64.to_le_bytes()],
+        &pfda_amm_id(),
+    );
+    svm.set_account(
+        ticket,
+        Account {
+            lamports: 2_000_000,
+            data: build_pfda_user_order_ticket_full(&payer.pubkey(), &pool, 0, 100, 0, 1_000_000, tbump),
+            owner: pfda_amm_id(),
+            executable: false,
+            rent_epoch: 0,
+        },
+    ).unwrap();
+
+    // Under the slippage branch, Claim refunds the input token and
+    // returns SlippageExceeded — but the input is returned from the
+    // vault via CPI, which requires enough vault balance. Vault is
+    // seeded with 1_000_000 so the 100-token refund fits.
+    let err = send(
+        &mut svm,
+        pfda_claim_ix(pfda_amm_id(), payer.pubkey(), pool, hist, ticket,
+            vault_a, vault_b, user_tok_a, user_tok_b),
+        &payer,
+    )
+    .err()
+    .expect("slippage-violating Claim should reject");
+    assert_custom_err(&err, ERR_SLIPPAGE_EXCEEDED, "claim slippage");
+}
+
+#[test]
+fn pfda_claim_rejects_double_claim() {
+    require_fixture!(PFDA_AMM_SO);
+    let Fixture { mut svm, payer, pool, vault_a, vault_b, user_tok_a, user_tok_b, .. } =
+        match seed(1, false) { Some(f) => f, None => return };
+
+    let (hist, hbump) = Address::find_program_address(
+        &[b"history", pool.as_ref(), &0u64.to_le_bytes()],
+        &pfda_amm_id(),
+    );
+    svm.set_account(
+        hist,
+        Account {
+            lamports: 1_500_000,
+            data: build_pfda_cleared_batch_history_full(&pool, 0, Q32_32_ONE, Q32_32_ONE, Q32_32_ONE, hbump),
+            owner: pfda_amm_id(),
+            executable: false,
+            rent_epoch: 0,
+        },
+    ).unwrap();
+
+    let (ticket, tbump) = Address::find_program_address(
+        &[b"ticket", pool.as_ref(), payer.pubkey().as_ref(), &0u64.to_le_bytes()],
+        &pfda_amm_id(),
+    );
+    // Pre-mark ticket as claimed so Claim immediately returns
+    // TicketAlreadyClaimed. This is a shortcut — the real scenario
+    // would Claim once then Claim again, but both hit the same check
+    // at the top of the handler.
+    let mut data = build_pfda_user_order_ticket_full(
+        &payer.pubkey(), &pool, 0, 100, 0, 0, tbump,
+    );
+    data[104] = 1; // is_claimed = true
+
+    svm.set_account(
+        ticket,
+        Account {
+            lamports: 2_000_000,
+            data,
+            owner: pfda_amm_id(),
+            executable: false,
+            rent_epoch: 0,
+        },
+    ).unwrap();
+
+    let err = send(
+        &mut svm,
+        pfda_claim_ix(pfda_amm_id(), payer.pubkey(), pool, hist, ticket,
+            vault_a, vault_b, user_tok_a, user_tok_b),
+        &payer,
+    )
+    .err()
+    .expect("already-claimed ticket should reject");
+    assert_custom_err(&err, ERR_TICKET_ALREADY_CLAIMED, "double claim");
+}

@@ -166,6 +166,25 @@ jobs:
         run: |
           RPC_URL=http://localhost:8899 bun test/e2e/axis-g3m/axis-g3m.jupiter-fork.e2e.ts
 
+      # #33: kidney flagged RebalanceViaJupiter disc=4 as zero-coverage —
+      # the existing jupiter-fork E2E uses attestation mode (disc=3)
+      # because real Jupiter routes need an API quote. The
+      # `test_ab_pr_validation_mainnet_fork` Rust test in
+      # ab-integration-tests already fetches a real quote and drives
+      # disc=4 end-to-end via run_mainnet_fork_pair — it's just
+      # #[ignore]d because it needs mainnet RPC + Jupiter API. Unlock
+      # it here with --ignored and a mainnet URL. continue-on-error
+      # so external API flakes don't gate the repo.
+      - name: Run disc=4 RebalanceViaJupiter regression test (real Jupiter route)
+        env:
+          MAINNET_RPC_URL: https://api.mainnet-beta.solana.com
+          AB_FORK_REPEATS: "1"
+        run: |
+          cd contracts/ab-integration-tests
+          cargo test --test ab_comparison test_ab_pr_validation_mainnet_fork \
+            -- --ignored --nocapture --test-threads=1
+        continue-on-error: true
+
       # axis-vault mainnet-fork check (#36): PR #42 shipped the
       # client-bundled SOL-in / SOL-out flow with stub tests only. This
       # step exercises the real Jupiter quote API + ALT resolution against

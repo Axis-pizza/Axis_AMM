@@ -1356,15 +1356,17 @@ async function main() {
       throw new Error(`Post-sweep total_supply should be ${MINIMUM_LIQUIDITY} (MINIMUM_LIQUIDITY lock), got ${totalSupplyAfter}`);
     }
     for (let i = 0; i < TOKEN_COUNT; i++) {
-      // Treasury held 100% of supply, so every vault token moves to the
-      // matching treasury basket ATA (modulo integer-division rounding).
-      // Allow off-by-one per leg since the proportional math uses
-      // vault_balance * burn / total_supply with u128 truncation.
+      // Payout = vault_balance * burn_amount / total_supply (u128 truncation).
+      // With MINIMUM_LIQUIDITY locked in total_supply, the vault is NOT fully
+      // drained — a residual of vault_balance * MINIMUM_LIQUIDITY / total_supply
+      // stays behind. Compute the expected payout with the same formula and
+      // allow off-by-one for integer truncation.
       const destBal = (await getAccount(conn, treasuryBasketAtas[i])).amount;
-      const diff = vaultBefore[i] > destBal ? vaultBefore[i] - destBal : destBal - vaultBefore[i];
+      const expectedPayout = (vaultBefore[i] * treasuryEtfBefore) / totalSupplyBefore;
+      const diff = destBal > expectedPayout ? destBal - expectedPayout : expectedPayout - destBal;
       if (diff > 1n) {
         throw new Error(
-          `Vault ${i}: expected ≈${vaultBefore[i]} to treasury, got ${destBal} (diff ${diff})`
+          `Vault ${i}: expected ≈${expectedPayout} to treasury, got ${destBal} (diff ${diff})`
         );
       }
     }

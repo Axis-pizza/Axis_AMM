@@ -27,6 +27,13 @@ pub enum VaultError {
     SweepForbidden = 9021,
     NothingToSweep = 9022,
     TreasuryNotApproved = 9023,
+    /// DepositSol / WithdrawSol scaffolding shipped; native Jupiter CPI
+    /// implementation is a follow-up after design review. Issue #36.
+    NotYetImplemented = 9024,
+    /// DepositSol / WithdrawSol restrict basket size to keep CU + tx
+    /// account count within the 1.4M / versioned-tx envelopes. 5-leg
+    /// baskets must use the client-bundled flow from PR #42. Issue #36.
+    BasketTooLargeForOnchainSol = 9025,
 }
 
 impl From<VaultError> for ProgramError {

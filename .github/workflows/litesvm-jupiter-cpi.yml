@@ -133,6 +133,15 @@ jobs:
           cd contracts/ab-integration-tests
           cargo test --test axis_vault_coverage -- --nocapture
 
+      # #36: DepositSol / WithdrawSol scaffolding guards. Locks down
+      # the parameter-validation surface (zero amount, basket-size cap)
+      # and the NotYetImplemented placeholder so the dispatcher stays
+      # sane while the Jupiter CPI body is being designed.
+      - name: Run axis-vault SOL-ix scaffold tests (LiteSVM)
+        run: |
+          cd contracts/ab-integration-tests
+          cargo test --test axis_vault_sol_ix_scaffold -- --nocapture
+
       - name: Generate LiteSVM A/B report
         run: |
           cd contracts/ab-integration-tests

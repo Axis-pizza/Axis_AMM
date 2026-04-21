@@ -163,41 +163,63 @@ pub fn fp_pow(base: u64, exp: u64) -> Option<u64> {
 /// Compute G3M invariant: k = ∏ reserve_i^{weight_i}
 /// reserves: raw token amounts (NOT fixed-point)
 /// weights_bps: basis points (sum to 10_000)
-/// Returns k as u128 (Q32.32 stored wide to avoid overflow during multiplication)
+/// Returns k as u128.
+///
+/// Precision: since Q32.32 can only represent integers in [0, 2^32),
+/// reserves ≥ 2^32 cannot be expressed directly. The old code simply
+/// right-shifted by `(msb - 32)` and called the result Q32.32 — that
+/// collapsed the value into [0, 1) in fixed-point terms and produced an
+/// invariant unrelated to the true reserves (a 2^40 reserve was treated
+/// as 0.5, so every price / drift / rebalance check downstream was
+/// wrong). Kidney flagged this in #33 for reserves ≥ 2^32.
+///
+/// Fix: extract a common scaling factor `S = 2^shift` across all
+/// reserves so every `R_i / S < 2^32`, compute `k' = ∏ (R_i / S)^{w_i}`
+/// in Q32.32, and rescale: since the weights sum to 1.0 (10_000 bps),
+/// `k = k' * S`. This keeps fp_pow inputs in range without distorting
+/// the invariant.
 pub fn compute_invariant(
     reserves: &[u64],
     weights_bps: &[u16],
     token_count: usize,
 ) -> Option<u128> {
-    let mut k: u64 = FP_ONE;
-
+    // Any zero reserve makes the geometric mean zero — short-circuit.
     for i in 0..token_count {
         if reserves[i] == 0 {
             return Some(0);
         }
+    }
 
-        // For large reserves, we can't use fp_from_u64 (overflows at 2^32).
-        // Instead, use u128 path: reserve_fp = reserve << 32
-        let reserve_fp = if reserves[i] < (1u64 << 32) {
-            reserves[i] << 32
-        } else {
-            // Scale down large reserves to fit Q32.32, track separately
-            // This loses precision but avoids overflow
-            // For production: use u128 fixed-point throughout
-            let shift = 64 - reserves[i].leading_zeros();
-            let scaled = reserves[i] >> (shift - 32);
-            scaled // already has implicit << 32 built in from the shift
-        };
+    // Find the widest reserve so we know how far to scale down. MSB
+    // position = 64 - leading_zeros. We need every (R_i >> shift) to
+    // fit in 31 bits so `(R_i >> shift) << 32` stays inside u64.
+    let max_bits = (0..token_count)
+        .map(|i| 64 - reserves[i].leading_zeros())
+        .max()
+        .unwrap_or(0);
+    let shift: u32 = if max_bits > 31 { max_bits - 31 } else { 0 };
 
-        // weight in Q32.32: weight_bps * FP_ONE / 10_000
-        let weight_fp = ((weights_bps[i] as u64) << 32)
-            .checked_div(10_000)?;
+    let mut k: u64 = FP_ONE;
+    for i in 0..token_count {
+        let r_scaled = reserves[i] >> shift;
+        if r_scaled == 0 {
+            // The common-factor rescale dropped this reserve below
+            // representable precision. Return None rather than silently
+            // producing a wrong invariant.
+            return None;
+        }
+        let reserve_fp = r_scaled << 32;
 
+        let weight_fp = ((weights_bps[i] as u64) << 32).checked_div(10_000)?;
         let pow_result = fp_pow(reserve_fp, weight_fp)?;
         k = fp_mul(k, pow_result)?;
     }
 
-    Some(k as u128)
+    // k is Q32.32 of `∏ (R_i / 2^shift)^{w_i}`. Since ∑ w_i = 1.0 when
+    // weights are valid, the unscaled invariant is `k * 2^shift`. Widen
+    // to u128 before the shift so the result doesn't overflow when the
+    // caller is comparing invariants on very large pools.
+    (k as u128).checked_shl(shift)
 }
 
 /// Compute swap output using G3M pricing.
@@ -317,5 +339,72 @@ mod tests {
 
         // k should increase (fee accrual) or stay same
         assert!(k_after >= k_before, "k decreased: {} -> {}", k_before, k_after);
+    }
+
+    // ───────── #33 regression: reserves ≥ 2^32 ─────────
+
+    #[test]
+    fn invariant_scales_with_equal_reserves_above_2_to_32() {
+        // 50/50 pool, both reserves = 2^40. True invariant is exactly
+        // 2^40 (∏ R_i^{w_i} with equal R_i and weights summing to 1).
+        // The old code produced ~0.5 in fp terms for each reserve, so
+        // k came back as roughly 0.5 << 32 instead of 2^40.
+        let r: u64 = 1u64 << 40;
+        let reserves = [r, r, 0, 0, 0];
+        let weights = [5000u16, 5000, 0, 0, 0];
+        let k = compute_invariant(&reserves, &weights, 2).expect("invariant");
+
+        // k is Q32.32, so the real-number invariant is k >> 32.
+        let k_int = (k >> 32) as u64;
+
+        // Allow 0.1% error for the fractional log2/exp2 path.
+        let tol = r / 1_000;
+        assert!(
+            k_int >= r.saturating_sub(tol) && k_int <= r.saturating_add(tol),
+            "k_int {} not within 0.1% of {}",
+            k_int,
+            r
+        );
+    }
+
+    #[test]
+    fn invariant_monotonic_under_scaling() {
+        // If every reserve doubles, invariant should also double
+        // (∏ (2R_i)^{w_i} = 2^{∑w_i} ∏ R_i^{w_i} = 2 * k). The old
+        // scaling bug broke this property for reserves ≥ 2^32.
+        let weights = [3333u16, 3333, 3334, 0, 0];
+
+        let reserves_small = [1_000_000u64, 2_000_000, 3_000_000, 0, 0];
+        let k_small = compute_invariant(&reserves_small, &weights, 3).unwrap();
+
+        let reserves_big = [
+            1_000_000u64 << 20,
+            2_000_000u64 << 20,
+            3_000_000u64 << 20,
+            0,
+            0,
+        ];
+        let k_big = compute_invariant(&reserves_big, &weights, 3).unwrap();
+
+        // k_big should be k_small * 2^20 (within fp rounding).
+        let expected = k_small << 20;
+        let tol = expected / 500; // 0.2%
+        assert!(
+            k_big >= expected.saturating_sub(tol) && k_big <= expected.saturating_add(tol),
+            "k_big {} not within 0.2% of {}",
+            k_big,
+            expected
+        );
+    }
+
+    #[test]
+    fn invariant_rejects_unrepresentable_reserve_mix() {
+        // One reserve at 2^40, another at 1. After common-factor shift
+        // by (40 - 31) = 9, the small reserve rounds to 0 and the
+        // invariant would be computed against a zero — return None
+        // rather than a garbage value.
+        let reserves = [1u64 << 40, 1, 0, 0, 0];
+        let weights = [5000u16, 5000, 0, 0, 0];
+        assert!(compute_invariant(&reserves, &weights, 2).is_none());
     }
 }

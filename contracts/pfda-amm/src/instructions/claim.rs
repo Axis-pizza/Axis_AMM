@@ -34,7 +34,10 @@ pub fn process_claim(program_id: &Pubkey, accounts: &[AccountInfo]) -> ProgramRe
         return Err(ProgramError::MissingRequiredSignature);
     }
 
-    // Load pool_state for PDA seeds
+    // Load pool_state for PDA seeds. #33: Claim skipped the vault
+    // cross-check that SwapRequest / AddLiquidity got in PR #46, so a
+    // crafted `vault_a` / `vault_b` could be drained on the payout path
+    // even though `is_cleared` was computed against real reserves.
     let (pool_key, pool_bump, token_a_mint, token_b_mint) = {
         let data = pool_state_ai.try_borrow_data()?;
         let pool = unsafe { load::<PoolState>(&data) }.ok_or(ProgramError::InvalidAccountData)?;
@@ -50,6 +53,9 @@ pub fn process_claim(program_id: &Pubkey, accounts: &[AccountInfo]) -> ProgramRe
         );
         if pool_state_ai.key() != &expected {
             return Err(ProgramError::InvalidSeeds);
+        }
+        if vault_a.key() != &pool.vault_a || vault_b.key() != &pool.vault_b {
+            return Err(PfmmError::VaultMismatch.into());
         }
         (*pool_state_ai.key(), bump, pool.token_a_mint, pool.token_b_mint)
     };

@@ -154,6 +154,9 @@ async function main() {
     keys: [
       { pubkey: payer.publicKey, isSigner: true, isWritable: true },
       { pubkey: pool, isSigner: false, isWritable: true },
+      // #33: attestation mode requires the Jupiter V6 program
+      // account as a witness at index 2.
+      { pubkey: JUPITER_V6, isSigner: false, isWritable: false },
     ],
     data: rebalData,
   });

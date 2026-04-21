@@ -126,7 +126,13 @@ pub fn process_rebalance(
         // real attestation ends up wired into the broader protocol).
         // This turns attestation from an implicit fallback into a
         // deliberate, Jupiter-coordinated rebalance.
-        let jupiter_account_idx = 2 + tc;
+        //
+        // Layout: [authority, pool, jupiter_program]. Jupiter lives at
+        // index 2 — immediately after pool_pda — because attestation
+        // mode by construction means no vault slots were provided, so
+        // `2 + tc` (the trustless-mode Jupiter slot) is always past
+        // the end of `accounts` and can never be reached.
+        let jupiter_account_idx = 2;
         if accounts.len() <= jupiter_account_idx {
             return Err(G3mError::AttestationRequiresJupiter.into());
         }

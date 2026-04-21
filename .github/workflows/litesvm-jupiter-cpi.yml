@@ -85,6 +85,20 @@ jobs:
           cd contracts/ab-integration-tests
           cargo test --test ab_comparison -- --nocapture --skip jupiter --skip mainnet
 
+      # ── #33 regression gates ──
+      # close_delay: CloseBatchHistory / CloseExpiredTicket success + rejection paths.
+      # scenario_coverage: AddLiquidity / SwapRequest rejections (wrong-vault, paused).
+      # Both run against the same pfda_amm_3.so built above — zero extra fixture cost.
+      - name: Run close-delay regression tests (LiteSVM)
+        run: |
+          cd contracts/ab-integration-tests
+          cargo test --test close_delay -- --nocapture
+
+      - name: Run scenario-coverage regression tests (LiteSVM)
+        run: |
+          cd contracts/ab-integration-tests
+          cargo test --test scenario_coverage -- --nocapture
+
       - name: Generate LiteSVM A/B report
         run: |
           cd contracts/ab-integration-tests

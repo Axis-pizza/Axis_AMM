@@ -31,6 +31,9 @@ enum Instruction {
     Deposit = 1,
     Withdraw = 2,
     SweepTreasury = 3,
+    /// SetPaused — authority-gated flip of the `paused` flag (#33).
+    /// Unblocks the paused-pool e2e scenarios kidney flagged.
+    SetPaused = 4,
 }
 
 impl Instruction {
@@ -40,6 +43,7 @@ impl Instruction {
             1 => Some(Instruction::Deposit),
             2 => Some(Instruction::Withdraw),
             3 => Some(Instruction::SweepTreasury),
+            4 => Some(Instruction::SetPaused),
             _ => None,
         }
     }
@@ -163,6 +167,14 @@ pub fn process_instruction(
             }
             let name = &data[1..1 + name_len];
             instructions::process_sweep_treasury(program_id, accounts, name)
+        }
+
+        Instruction::SetPaused => {
+            // Data: [paused: u8]
+            if data.is_empty() {
+                return Err(ProgramError::InvalidInstructionData);
+            }
+            instructions::process_set_paused(program_id, accounts, data[0])
         }
     }
 }

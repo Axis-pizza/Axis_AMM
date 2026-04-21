@@ -11,6 +11,10 @@ path = "src/lib.rs"
 name = "ab_comparison"
 path = "tests/ab_comparison.rs"
 
+[[test]]
+name = "close_delay"
+path = "tests/close_delay.rs"
+
 [dependencies]
 litesvm = "0.11"
 solana-keypair = "3.1"

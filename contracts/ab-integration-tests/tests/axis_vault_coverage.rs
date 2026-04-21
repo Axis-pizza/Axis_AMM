@@ -565,6 +565,179 @@ fn deposit_rejects_wrong_etf_mint() {
     assert_custom_err(&err, ERR_MINT_MISMATCH, "deposit wrong mint");
 }
 
+// ─── Second-depositor proportional-mint math (real CreateEtf flow) ─────
+// This one can't use the pre-seeded-state shortcut: proportional math
+// only runs when `total_supply > 0`, and we need the vault balances to
+// have come from a genuine Deposit so the `vault_balance /
+// total_supply` ratio is consistent with on-chain bookkeeping.
+
+#[allow(clippy::too_many_arguments)]
+fn create_etf_ix(
+    authority: Address,
+    etf_state: Address,
+    etf_mint: Address,
+    treasury: Address,
+    basket_mints: &[Address],
+    basket_vaults: &[Address],
+    token_count: u8,
+    weights_bps: &[u16],
+    ticker: &[u8],
+    name: &[u8],
+) -> Instruction {
+    let mut data = vec![0u8];
+    data.push(token_count);
+    for w in weights_bps {
+        data.extend_from_slice(&w.to_le_bytes());
+    }
+    data.push(ticker.len() as u8);
+    data.extend_from_slice(ticker);
+    data.push(name.len() as u8);
+    data.extend_from_slice(name);
+
+    let mut accts = vec![
+        AccountMeta::new(authority, true),
+        AccountMeta::new(etf_state, false),
+        AccountMeta::new(etf_mint, false),
+        AccountMeta::new_readonly(treasury, false),
+        AccountMeta::new_readonly(system_program_id(), false),
+        AccountMeta::new_readonly(token_program_id(), false),
+    ];
+    for m in basket_mints {
+        accts.push(AccountMeta::new_readonly(*m, false));
+    }
+    for v in basket_vaults {
+        accts.push(AccountMeta::new(*v, false));
+    }
+    Instruction { program_id: axis_vault_id(), accounts: accts, data }
+}
+
+#[test]
+fn deposit_second_depositor_mints_proportional_amount() {
+    require_fixture!(AXIS_VAULT_SO);
+    let mut svm = LiteSVM::new();
+    if !std::path::Path::new(AXIS_VAULT_SO).exists() { return; }
+    svm.add_program_from_file(axis_vault_id(), AXIS_VAULT_SO).unwrap();
+
+    let payer = Keypair::new();
+    svm.airdrop(&payer.pubkey(), 100 * LAMPORTS_PER_SOL).unwrap();
+
+    // 3-token equal-weight basket. 3334 + 3333 + 3333 = 10_000.
+    let name = b"PROP".to_vec();
+    let ticker = b"AX".to_vec();
+    let weights: [u16; 3] = [3334, 3333, 3333];
+
+    // Basket mints (real Token-Program SPL mints).
+    let basket_mints: Vec<Address> = (0..3).map(|_| {
+        let m = Address::new_unique();
+        create_mint(&mut svm, m, &payer.pubkey(), 6);
+        m
+    }).collect();
+
+    // User ATAs for each basket mint — pre-fund with plenty.
+    let user_basket_atas: Vec<Address> = (0..3).map(|i| {
+        let a = Address::new_unique();
+        create_token_account(&mut svm, a, &basket_mints[i], &payer.pubkey(), 1_000_000_000);
+        a
+    }).collect();
+
+    // Uninitialized vaults — axis-vault's CreateEtf calls
+    // InitializeAccount3 on each.
+    let vaults: Vec<Address> = (0..3).map(|_| {
+        let v = Address::new_unique();
+        create_uninit_token_account(&mut svm, v);
+        v
+    }).collect();
+
+    // Uninitialized ETF mint — CreateEtf calls InitializeMint2.
+    let etf_mint = Address::new_unique();
+    create_uninit_mint_account(&mut svm, etf_mint);
+
+    let treasury = Address::new_unique();
+
+    let (etf_state, _bump) = Address::find_program_address(
+        &[b"etf", payer.pubkey().as_ref(), &name],
+        &axis_vault_id(),
+    );
+
+    // Real CreateEtf — drives InitializeMint2 + InitializeAccount3 x3
+    // + SystemCreateAccount for etf_state.
+    send(
+        &mut svm,
+        create_etf_ix(
+            payer.pubkey(), etf_state, etf_mint, treasury,
+            &basket_mints, &vaults, 3, &weights, &ticker, &name,
+        ),
+        &payer,
+    )
+    .expect("CreateEtf setup");
+
+    // ETF ATAs for depositor and treasury — created post-CreateEtf
+    // because the mint wasn't a real SPL mint until then.
+    let user_etf_ata = Address::new_unique();
+    create_token_account(&mut svm, user_etf_ata, &etf_mint, &payer.pubkey(), 0);
+    let treasury_etf_ata = Address::new_unique();
+    create_token_account(&mut svm, treasury_etf_ata, &etf_mint, &treasury, 0);
+
+    // ── First deposit: 10_000_000. amount == base units spread across
+    //    3 legs by weights: 3_334_000 / 3_333_000 / 3_333_000.
+    //    mint = amount = 10_000_000. fee = 30 bps = 30_000. liquidity
+    //    lock = 1_000 (virtual). net to user = 9_969_000.
+    svm.expire_blockhash();
+    send(
+        &mut svm,
+        deposit_ix(
+            payer.pubkey(), etf_state, etf_mint,
+            user_etf_ata, treasury_etf_ata,
+            &user_basket_atas, &vaults, &name, 10_000_000,
+        ),
+        &payer,
+    )
+    .expect("first Deposit");
+
+    let user_after_first = read_token_amount(&svm, &user_etf_ata);
+    assert_eq!(
+        user_after_first, 9_969_000,
+        "first-deposit net mint should equal amount - fee - MINIMUM_LIQUIDITY"
+    );
+
+    // Vault balances after first deposit (for reference in the math):
+    //   vault[0] = 3_334_000, vault[1..2] = 3_333_000 each
+    //   etf.total_supply = 10_000_000 (includes 1_000 lock)
+
+    // ── Second deposit: 5_000_000. Proportional math:
+    //   token_amounts[0] = 5_000_000 * 3334 / 10_000 = 1_667_000
+    //   token_amounts[1] = 5_000_000 * 3333 / 10_000 = 1_666_500
+    //   token_amounts[2] = 5_000_000 * 3333 / 10_000 = 1_666_500
+    //   candidate[i] = token_amounts[i] * total_supply / vault_balance[i]
+    //     leg 0: 1_667_000 * 10_000_000 / 3_334_000 = 5_000_000 (exact)
+    //     leg 1: 1_666_500 * 10_000_000 / 3_333_000 = 5_000_000 (exact)
+    //     leg 2: 1_666_500 * 10_000_000 / 3_333_000 = 5_000_000 (exact)
+    //   mint_amount = min = 5_000_000
+    //   fee = 5_000_000 * 30 / 10_000 = 15_000
+    //   net_mint = 4_985_000
+    svm.expire_blockhash();
+    send(
+        &mut svm,
+        deposit_ix(
+            payer.pubkey(), etf_state, etf_mint,
+            user_etf_ata, treasury_etf_ata,
+            &user_basket_atas, &vaults, &name, 5_000_000,
+        ),
+        &payer,
+    )
+    .expect("second Deposit");
+
+    let user_after_second = read_token_amount(&svm, &user_etf_ata);
+    let second_depositor_delta = user_after_second - user_after_first;
+    assert_eq!(
+        second_depositor_delta, 4_985_000,
+        "second-depositor proportional mint should equal 5M - 15k fee \
+         (proof that vault_balance / total_supply math holds across \
+         deposits — regression guard for the NAV-deviation / per-vault \
+         candidate logic)"
+    );
+}
+
 #[test]
 fn deposit_rejects_wrong_vault() {
     require_fixture!(AXIS_VAULT_SO);

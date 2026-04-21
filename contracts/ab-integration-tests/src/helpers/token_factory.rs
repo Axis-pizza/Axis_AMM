@@ -84,6 +84,22 @@ pub fn create_uninit_token_account(svm: &mut LiteSVM, addr: Address) {
     .unwrap();
 }
 
+/// Create an uninitialized SPL mint account (82 bytes, Token-Program-owned,
+/// zero data). axis-vault's CreateEtf calls `InitializeMint2` on this.
+pub fn create_uninit_mint_account(svm: &mut LiteSVM, addr: Address) {
+    svm.set_account(
+        addr,
+        Account {
+            lamports: LAMPORTS_PER_SOL,
+            data: vec![0u8; 82],
+            owner: token_program_id(),
+            executable: false,
+            rent_epoch: 0,
+        },
+    )
+    .unwrap();
+}
+
 /// Create a token account with extra data padding for CPI realloc headroom.
 /// Used for vault accounts that Jupiter may need to resize during swaps.
 pub fn create_token_account_padded(

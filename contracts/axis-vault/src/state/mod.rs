@@ -1,6 +1,6 @@
 pub mod etf;
 
-pub use etf::{EtfState, MAX_BASKET_TOKENS};
+pub use etf::{EtfState, MAX_BASKET_TOKENS, MAX_ETF_NAME_LEN, MAX_ETF_TICKER_LEN};
 
 pub unsafe fn load_mut<T: Copy>(data: &mut [u8]) -> Option<&mut T> {
     if data.len() < core::mem::size_of::<T>() { return None; }

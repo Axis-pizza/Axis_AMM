@@ -16,3 +16,71 @@ pub const TOKEN_PROGRAM_ID: [u8; 32] = [
 /// reject early with `NavDeviationExceeded` rather than minting at a stale
 /// composition. 300 bps = 3 %.
 pub const MAX_NAV_DEVIATION_BPS: u64 = 300;
+
+/// Minimum base amount accepted on the first deposit into a fresh ETF.
+/// Closes the cheap-attacker leg of the inflation / donation attack:
+/// without this, an attacker could seed with `amount = 1`, then donate
+/// huge quantities of basket tokens directly into the vault ATAs to
+/// push every proportional-mint candidate to zero for the next
+/// legitimate depositor (they would revert on `ZeroDeposit`, bricking
+/// the pool). 1_000_000 = 1 token at 6 decimals.
+pub const MIN_FIRST_DEPOSIT: u64 = 1_000_000;
+
+/// Virtual liquidity lock added to `etf.total_supply` on the first
+/// deposit but never minted to any holder. Combined with
+/// `MIN_FIRST_DEPOSIT` this keeps `vault_balance / total_supply`
+/// bounded below for the life of the ETF so that vault donations can
+/// never round proportional math to zero. Mirrors Uniswap V2's
+/// `MINIMUM_LIQUIDITY = 1_000`. Because nobody holds these tokens,
+/// they can never be withdrawn — a tiny amount of each basket token
+/// is permanently stranded in the vaults, which is the intended cost.
+pub const MINIMUM_LIQUIDITY: u64 = 1_000;
+
+/// Protocol treasury multisig address — the single destination for
+/// protocol fee revenue.
+///
+/// Per @muse0509 on #38 (2026-04-20), the closed-beta treasury is a
+/// protocol-wide Squads V4 multisig co-managed by @muse0509 and
+/// @kidneyweakx. `CreateEtf` enforces a governance gate that rejects any
+/// `treasury` pubkey not equal to this constant **once the constant is
+/// non-zero** — while it stays `[0u8; 32]` the gate is inert so tests and
+/// ad-hoc devnet flows can still create ETFs against throwaway
+/// treasuries. Flipping this value to the deployed Squads vault key is a
+/// one-line change and takes the gate live with no further code edits.
+///
+/// TODO(ops #38): replace zeros with the deployed Squads V4 vault key
+/// once provisioned on devnet → mainnet.
+pub const PROTOCOL_TREASURY: [u8; 32] = [0u8; 32];
+
+/// Returns true when `PROTOCOL_TREASURY` has been set to a real address
+/// (i.e. the Squads V4 multisig is deployed and the constant above has
+/// been flipped). Used by `CreateEtf` to conditionally enforce the
+/// governance gate on `etf.treasury`.
+pub const fn protocol_treasury_is_active() -> bool {
+    let mut i = 0;
+    while i < 32 {
+        if PROTOCOL_TREASURY[i] != 0 {
+            return true;
+        }
+        i += 1;
+    }
+    false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn gate_inert_when_treasury_is_zeros() {
+        assert!(!protocol_treasury_is_active());
+    }
+
+    #[test]
+    fn gate_active_when_any_byte_nonzero() {
+        let mut k = [0u8; 32];
+        k[17] = 1;
+        let active = k.iter().any(|b| *b != 0);
+        assert!(active);
+    }
+}

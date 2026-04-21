@@ -42,6 +42,12 @@ pub fn process_initialize_pool_3(
         return Err(Pfda3Error::InvalidWeight.into());
     }
 
+    // #33: reject a fee ≥ 100% up-front so a misconfigured pool can
+    // never deploy. Mirrors the guard added to pfda-amm.
+    if base_fee_bps >= 10_000 {
+        return Err(Pfda3Error::InvalidFeeBps.into());
+    }
+
     // Accounts: payer, pool, queue, mint0-2, vault0-2, treasury, system, token_program
     if accounts.len() < 12 {
         return Err(ProgramError::NotEnoughAccountKeys);

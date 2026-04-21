@@ -3,19 +3,22 @@ use pinocchio::{
     instruction::{Seed, Signer},
     program_error::ProgramError,
     pubkey::{self, Pubkey},
-    sysvars::{rent::Rent, Sysvar},
+    sysvars::{clock::Clock, rent::Rent, Sysvar},
     ProgramResult,
 };
 use pinocchio_system::instructions::CreateAccount;
 use pinocchio_token::instructions::{InitializeAccount3, InitializeMint2};
 
+use crate::constants::{protocol_treasury_is_active, PROTOCOL_TREASURY};
 use crate::error::VaultError;
-use crate::state::{load, load_mut, EtfState, MAX_BASKET_TOKENS};
+use crate::state::{
+    load_mut, EtfState, MAX_BASKET_TOKENS, MAX_ETF_NAME_LEN, MAX_ETF_TICKER_LEN,
+};
 
 /// CreateEtf — initialize an ETF vault with a basket of tokens.
 ///
 /// Creates:
-///   1. EtfState PDA (stores basket config)
+///   1. EtfState PDA (stores basket config + metadata)
 ///   2. SPL token mint for the ETF token (EtfState PDA is mint authority)
 ///   3. Vault token accounts for each basket token (EtfState PDA is owner)
 ///
@@ -29,12 +32,17 @@ use crate::state::{load, load_mut, EtfState, MAX_BASKET_TOKENS};
 ///   6..6+N: []             basket token mints
 ///   6+N..6+2N: [writable]  basket vault accounts (uninitialized)
 ///
-/// Data: [token_count: u8][weights_bps: [u16; N]][name: up to 32 bytes]
+/// Data:
+///   [token_count: u8]
+///   [weights_bps: [u16 LE; N]]
+///   [ticker_len: u8][ticker: bytes (2..=16, ASCII upper/digit)]
+///   [name_len: u8][name: bytes (1..=32, UTF-8; also used as PDA seed)]
 pub fn process_create_etf(
     program_id: &Pubkey,
     accounts: &[AccountInfo],
     token_count: u8,
     weights_bps: &[u16],
+    ticker: &[u8],
     name: &[u8],
 ) -> ProgramResult {
     let tc = token_count as usize;
@@ -48,8 +56,30 @@ pub fn process_create_etf(
     if weight_sum != 10_000 {
         return Err(VaultError::WeightsMismatch.into());
     }
-    if name.is_empty() || name.len() > 32 {
-        return Err(VaultError::InvalidTickerLength.into());
+
+    // Name: 1..=32 bytes, valid UTF-8. Stored on-chain as-is and reused
+    // as the `name` PDA seed; UTF-8 validation keeps wallets/explorers
+    // from rendering garbage.
+    if name.is_empty() || name.len() > MAX_ETF_NAME_LEN {
+        return Err(VaultError::InvalidName.into());
+    }
+    if core::str::from_utf8(name).is_err() {
+        return Err(VaultError::InvalidName.into());
+    }
+
+    // Ticker: 2..=16 bytes, ASCII uppercase A-Z or digits 0-9. Mirrors
+    // traditional-finance ticker conventions; no lowercase, spaces, or
+    // symbols. Reject here rather than silently normalizing so on-chain
+    // state is a faithful record of what the creator signed.
+    if ticker.len() < 2 || ticker.len() > MAX_ETF_TICKER_LEN {
+        return Err(VaultError::InvalidTicker.into());
+    }
+    for &b in ticker {
+        let ascii_upper = (b'A'..=b'Z').contains(&b);
+        let ascii_digit = (b'0'..=b'9').contains(&b);
+        if !(ascii_upper || ascii_digit) {
+            return Err(VaultError::InvalidTicker.into());
+        }
     }
 
     let min_accounts = 6 + tc * 2;
@@ -66,6 +96,14 @@ pub fn process_create_etf(
 
     if !authority.is_signer() {
         return Err(ProgramError::MissingRequiredSignature);
+    }
+
+    // #38 governance gate: once PROTOCOL_TREASURY is flipped from zeros to
+    // the deployed Squads V4 multisig, every ETF must route fees there. The
+    // gate is inert while the constant is all-zeros so devnet tests using
+    // throwaway treasuries still work until ops is ready.
+    if protocol_treasury_is_active() && treasury_ai.key() != &PROTOCOL_TREASURY {
+        return Err(VaultError::TreasuryNotApproved.into());
     }
 
     // Derive EtfState PDA: [b"etf", authority, name]
@@ -142,6 +180,11 @@ pub fn process_create_etf(
         }
     }
 
+    // Capture creation slot for on-chain provenance (issue #37). Reading
+    // Clock before we take the mutable state borrow keeps the CPI-free
+    // region tight.
+    let created_at_slot = Clock::get()?.slot;
+
     // Write EtfState
     {
         let mut data = etf_state_ai.try_borrow_mut_data()?;
@@ -162,6 +205,18 @@ pub fn process_create_etf(
         etf.fee_bps = 30;
         etf.paused = 0;
         etf.bump = pda_bump;
+
+        // Zero-pad name + ticker into their fixed-size slots so clients
+        // can decode a deterministic blob regardless of actual length.
+        let mut name_buf = [0u8; MAX_ETF_NAME_LEN];
+        name_buf[..name.len()].copy_from_slice(name);
+        etf.name = name_buf;
+
+        let mut ticker_buf = [0u8; MAX_ETF_TICKER_LEN];
+        ticker_buf[..ticker.len()].copy_from_slice(ticker);
+        etf.ticker = ticker_buf;
+
+        etf.created_at_slot = created_at_slot;
         etf._padding = [0; 4];
     }
 

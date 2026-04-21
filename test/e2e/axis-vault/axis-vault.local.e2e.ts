@@ -17,8 +17,19 @@ import * as os from "os";
 const PROGRAM_ID = new PublicKey("DeeUnCHcnPG8arbjGTLhTKeDhpPUBper3TDrpFPHnCwy");
 const RPC_URL = process.env.RPC_URL ?? "https://api.devnet.solana.com";
 const ETF_NAME = process.env.ETF_NAME ?? `AX${Date.now().toString(36).toUpperCase().slice(-10)}`;
+// Ticker: ASCII upper/digits only, 2..=16 bytes (issue #37). Default stays
+// deterministic across reruns by hashing into the process-start timestamp.
+const ETF_TICKER = process.env.ETF_TICKER ?? `AX${Date.now().toString(36).toUpperCase().slice(-4)}`;
 const TOKEN_COUNT = 3;
 const WEIGHTS = [3334, 3333, 3333]; // ~33.3% each, sums to 10000
+
+// Offsets in EtfState — confirmed via `cargo test print_sizes -- --nocapture`.
+// total_supply at 408 is unchanged across #37; name/ticker/created_at_slot
+// are appended after bump.
+const OFFSET_TOTAL_SUPPLY = 408;
+const OFFSET_NAME = 452;
+const OFFSET_TICKER = 484;
+const OFFSET_CREATED_AT_SLOT = 504;
 
 function loadPayer(): Keypair {
   return Keypair.fromSecretKey(Uint8Array.from(JSON.parse(fs.readFileSync(`${os.homedir()}/.config/solana/id.json`, "utf-8"))));
@@ -99,17 +110,20 @@ async function main() {
     SystemProgram.transfer({ fromPubkey: payer.publicKey, toPubkey: treasuryKp.publicKey, lamports: LAMPORTS_PER_SOL / 10 })
   ), [payer]);
 
-  // 6. CreateEtf
+  // 6. CreateEtf (data layout per #37: ticker precedes name)
   console.log("\n> CreateEtf");
+  const tickerBytes = Buffer.from(ETF_TICKER);
   const weightsBuf = Buffer.alloc(TOKEN_COUNT * 2);
   for (let i = 0; i < TOKEN_COUNT; i++) weightsBuf.writeUInt16LE(WEIGHTS[i], i * 2);
 
   const createData = Buffer.concat([
-    Buffer.from([0]),               // disc = CreateEtf
-    Buffer.from([TOKEN_COUNT]),     // token_count
-    weightsBuf,                     // weights
-    Buffer.from([nameBytes.length]),// name_len
-    nameBytes,                      // name
+    Buffer.from([0]),                   // disc = CreateEtf
+    Buffer.from([TOKEN_COUNT]),         // token_count
+    weightsBuf,                         // weights
+    Buffer.from([tickerBytes.length]),  // ticker_len
+    tickerBytes,                        // ticker
+    Buffer.from([nameBytes.length]),    // name_len
+    nameBytes,                          // name
   ]);
 
   const createSig = await sendAndConfirmTransaction(conn, new Transaction().add(new TransactionInstruction({
@@ -130,10 +144,29 @@ async function main() {
   })), [payer]);
   console.log("  CU:", await getCU(conn, createSig));
 
-  // Verify ETF state
+  // Verify ETF state (#37: also check stored metadata).
   const etfInfo = await conn.getAccountInfo(etfState);
-  const totalSupply = etfInfo!.data.readBigUInt64LE(408);
+  const totalSupply = etfInfo!.data.readBigUInt64LE(OFFSET_TOTAL_SUPPLY);
+  const storedName = etfInfo!.data
+    .subarray(OFFSET_NAME, OFFSET_NAME + 32)
+    .toString("utf8")
+    .replace(/\0+$/, "");
+  const storedTicker = etfInfo!.data
+    .subarray(OFFSET_TICKER, OFFSET_TICKER + 16)
+    .toString("ascii")
+    .replace(/\0+$/, "");
+  const storedCreatedAt = etfInfo!.data.readBigUInt64LE(OFFSET_CREATED_AT_SLOT);
+  if (storedName !== ETF_NAME) {
+    throw new Error(`Stored name mismatch: on-chain='${storedName}' expected='${ETF_NAME}'`);
+  }
+  if (storedTicker !== ETF_TICKER) {
+    throw new Error(`Stored ticker mismatch: on-chain='${storedTicker}' expected='${ETF_TICKER}'`);
+  }
+  if (storedCreatedAt === 0n) {
+    throw new Error(`created_at_slot is 0 — should be captured from Clock sysvar`);
+  }
   console.log("  Total supply:", totalSupply.toString());
+  console.log(`  Stored metadata: ticker='${storedTicker}', name='${storedName}', slot=${storedCreatedAt}`);
 
   // 7. Create user's ETF token account + treasury ETF token account
   const userEtfAta = await createAccount(conn, payer, etfMintKp.publicKey, payer.publicKey);
@@ -178,13 +211,17 @@ async function main() {
   }
 
   // Fee assertion: first deposit is 1_000_000_000 base; fee_bps=30 (0.3%)
-  // so treasury should hold 3_000_000 ETF tokens and user ETF balance
-  // should be exactly 997_000_000 (net of fee). Asserting both proves the
-  // fee actually moved to treasury rather than being silently destroyed.
+  // so treasury should hold 3_000_000 ETF tokens. Because this is the
+  // first deposit into a fresh ETF, MINIMUM_LIQUIDITY (=1_000) is also
+  // locked virtually in total_supply — so the user receives
+  // 1_000_000_000 - 3_000_000 (fee) - 1_000 (lock) = 996_999_000. The
+  // MINIMUM_LIQUIDITY tokens are not minted to any holder; they're just
+  // counted in total_supply to keep proportional math bounded (see
+  // issue #35 / constants.rs).
   {
     const treasuryBal = (await getAccount(conn, treasuryEtfAta)).amount;
     const expectedFee = 3_000_000n;
-    const expectedNet = 997_000_000n;
+    const expectedNet = 996_999_000n;
     if (treasuryBal !== expectedFee) {
       throw new Error(`Deposit fee mismatch: treasury=${treasuryBal}, expected=${expectedFee}`);
     }
@@ -192,6 +229,7 @@ async function main() {
       throw new Error(`Net mint mismatch: user=${etfBalance}, expected=${expectedNet}`);
     }
     console.log(`  Treasury fee received: ${treasuryBal} (30 bps of 1_000_000_000)`);
+    console.log(`  MINIMUM_LIQUIDITY locked: 1_000 (virtual, never withdrawable)`);
   }
 
   // 8. Withdraw — burn half the ETF tokens
@@ -237,14 +275,16 @@ async function main() {
     console.log(`  Token ${i} received back: ${received.toLocaleString()}`);
   }
 
-  // Withdraw fee assertion: burn_amount was etfBalance/2 = 498_500_000;
-  // fee_bps=30 → fee = 1_495_500. Treasury already had 3_000_000 from the
-  // Deposit fee, so its balance should now be 3_000_000 + 1_495_500 =
-  // 4_495_500. Asserting the delta proves the withdraw fee transfer
-  // actually hit the treasury (and wasn't silently burned).
+  // Withdraw fee assertion: etfBalance=996_999_000 (post-#35 MINIMUM_LIQUIDITY
+  // lock), so burnAmount = etfBalance/2 = 498_499_500. fee_bps=30 →
+  // fee = floor(498_499_500 * 30 / 10_000) = 1_495_498 (Rust integer
+  // div on 14_954_985_000 / 10_000 truncates the .5). Treasury already
+  // had 3_000_000 from Deposit, so its balance should now be
+  // 3_000_000 + 1_495_498 = 4_495_498. Asserting the delta proves the
+  // withdraw fee transfer actually hit the treasury.
   {
     const treasuryBalAfter = (await getAccount(conn, treasuryEtfAta)).amount;
-    const expected = 4_495_500n;
+    const expected = 4_495_498n;
     if (treasuryBalAfter !== expected) {
       throw new Error(`Withdraw fee mismatch: treasury=${treasuryBalAfter}, expected=${expected}`);
     }
@@ -296,12 +336,15 @@ async function main() {
     const dupWeightsBuf = Buffer.alloc(TOKEN_COUNT * 2);
     for (let i = 0; i < TOKEN_COUNT; i++) dupWeightsBuf.writeUInt16LE(dupWeights[i], i * 2);
 
+    const dupTicker = Buffer.from("DUP1");
     const dupCreateData = Buffer.concat([
-      Buffer.from([0]),               // disc = CreateEtf
-      Buffer.from([TOKEN_COUNT]),     // token_count
-      dupWeightsBuf,                  // weights
-      Buffer.from([dupName.length]),  // name_len
-      dupName,                        // name
+      Buffer.from([0]),                 // disc = CreateEtf
+      Buffer.from([TOKEN_COUNT]),       // token_count
+      dupWeightsBuf,                    // weights
+      Buffer.from([dupTicker.length]),  // ticker_len
+      dupTicker,                        // ticker
+      Buffer.from([dupName.length]),    // name_len
+      dupName,                          // name
     ]);
 
     await sendAndConfirmTransaction(conn, new Transaction().add(new TransactionInstruction({
@@ -744,9 +787,10 @@ async function main() {
   // 17. Test: Full user-balance withdrawal → user goes to 0, total_supply
   // shrinks by effective_burn (post-fee). With the fee mechanism the fee
   // portion transfers to treasury rather than burning, so total_supply
-  // retains exactly the treasury's ETF balance. The invariant asserted
-  // here is the post-withdraw one: total_supply == treasury_etf_balance.
-  console.log("\n> Test: Full withdrawal; total_supply should equal treasury balance");
+  // retains the treasury's ETF balance plus the virtual MINIMUM_LIQUIDITY
+  // lock set on the first deposit (#35). Invariant asserted:
+  //   total_supply == treasury_etf_balance + MINIMUM_LIQUIDITY (=1_000)
+  console.log("\n> Test: Full withdrawal; total_supply should equal treasury balance + MINIMUM_LIQUIDITY");
   {
     const remaining = (await getAccount(conn, userEtfAta)).amount;
     const fullWithdrawData = Buffer.concat([
@@ -776,10 +820,14 @@ async function main() {
     if (etfEnd !== 0n) {
       throw new Error(`Full withdrawal left user ETF balance > 0: ${etfEnd}`);
     }
-    if (totalSupplyEnd !== treasuryEnd) {
-      throw new Error(`Supply/treasury mismatch after full withdraw: supply=${totalSupplyEnd}, treasury=${treasuryEnd}`);
+    const MINIMUM_LIQUIDITY = 1_000n;
+    if (totalSupplyEnd !== treasuryEnd + MINIMUM_LIQUIDITY) {
+      throw new Error(
+        `Supply/treasury mismatch after full withdraw: supply=${totalSupplyEnd}, ` +
+        `treasury=${treasuryEnd}, expected supply == treasury + ${MINIMUM_LIQUIDITY}`
+      );
     }
-    console.log(`  Burned ${remaining}; user=0, total_supply=${totalSupplyEnd} (== treasury)`);
+    console.log(`  Burned ${remaining}; user=0, total_supply=${totalSupplyEnd} (== treasury + MIN_LIQ)`);
   }
 
   // 18. Test: CreateEtf with token_count < 2 → InvalidBasketSize (9002 / 0x232A)
@@ -802,8 +850,10 @@ async function main() {
     })), [payer, badVaultKp]);
 
     // token_count=1, weights=[10000] — valid weight sum but basket too small
+    const badTicker = Buffer.from("BADSZ");
     const badData = Buffer.concat([
       Buffer.from([0]), Buffer.from([1]), u16Le(10000),
+      Buffer.from([badTicker.length]), badTicker,
       Buffer.from([badName.length]), badName,
     ]);
     await sendAndConfirmTransaction(conn, new Transaction().add(new TransactionInstruction({
@@ -862,8 +912,10 @@ async function main() {
     const badWeights = [3333, 3333, 3333];
     const wbuf = Buffer.alloc(TOKEN_COUNT * 2);
     for (let i = 0; i < TOKEN_COUNT; i++) wbuf.writeUInt16LE(badWeights[i], i * 2);
+    const badTicker = Buffer.from("BADWT");
     const badData = Buffer.concat([
       Buffer.from([0]), Buffer.from([TOKEN_COUNT]), wbuf,
+      Buffer.from([badTicker.length]), badTicker,
       Buffer.from([badName.length]), badName,
     ]);
     await sendAndConfirmTransaction(conn, new Transaction().add(new TransactionInstruction({
@@ -917,6 +969,7 @@ async function main() {
 
     const dupData = Buffer.concat([
       Buffer.from([0]), Buffer.from([TOKEN_COUNT]), weightsBuf,
+      Buffer.from([tickerBytes.length]), tickerBytes,
       Buffer.from([nameBytes.length]), nameBytes, // same name as Step 5 → same PDA
     ]);
     await sendAndConfirmTransaction(conn, new Transaction().add(new TransactionInstruction({
@@ -945,6 +998,497 @@ async function main() {
       throw new Error("CreateEtf duplicate-init should have failed");
     } else {
       console.log("  Rejected with error (unexpected code):", msg.slice(0, 120));
+    }
+  }
+
+  // 21-22 — Issue #35 (first-depositor inflation/donation DoS).
+  //
+  // Each #35 test needs its own fresh ETF because the guards only
+  // apply when total_supply == 0. We factor the setup into a helper
+  // to avoid scrolling past 200 lines of createAccount boilerplate.
+  async function spinUpFreshEtf(label: string) {
+    const name = Buffer.from(`${label}${Date.now().toString(36).slice(-4).toUpperCase()}`);
+    const [state] = PublicKey.findProgramAddressSync(
+      [Buffer.from("etf"), payer.publicKey.toBuffer(), name],
+      PROGRAM_ID,
+    );
+    const mintKp = Keypair.generate();
+    await sendAndConfirmTransaction(conn, new Transaction().add(SystemProgram.createAccount({
+      fromPubkey: payer.publicKey, newAccountPubkey: mintKp.publicKey,
+      lamports: mintRent, space: MINT_SIZE, programId: TOKEN_PROGRAM_ID,
+    })), [payer, mintKp]);
+    const vKps: Keypair[] = [];
+    const vPks: PublicKey[] = [];
+    const vtx = new Transaction();
+    for (let i = 0; i < TOKEN_COUNT; i++) {
+      const kp = Keypair.generate();
+      vKps.push(kp);
+      vPks.push(kp.publicKey);
+      vtx.add(SystemProgram.createAccount({
+        fromPubkey: payer.publicKey, newAccountPubkey: kp.publicKey,
+        lamports: vaultRent, space: ACCOUNT_SIZE, programId: TOKEN_PROGRAM_ID,
+      }));
+    }
+    await sendAndConfirmTransaction(conn, vtx, [payer, ...vKps]);
+    const treasuryKp = Keypair.generate();
+    await sendAndConfirmTransaction(conn, new Transaction().add(
+      SystemProgram.transfer({ fromPubkey: payer.publicKey, toPubkey: treasuryKp.publicKey, lamports: LAMPORTS_PER_SOL / 20 })
+    ), [payer]);
+
+    // CreateEtf (data layout per #37: ticker precedes name)
+    const wbuf = Buffer.alloc(TOKEN_COUNT * 2);
+    for (let i = 0; i < TOKEN_COUNT; i++) wbuf.writeUInt16LE(WEIGHTS[i], i * 2);
+    const tickerBytes = Buffer.from("AX");
+    const cdata = Buffer.concat([
+      Buffer.from([0]), Buffer.from([TOKEN_COUNT]), wbuf,
+      Buffer.from([tickerBytes.length]), tickerBytes,
+      Buffer.from([name.length]), name,
+    ]);
+    await sendAndConfirmTransaction(conn, new Transaction().add(new TransactionInstruction({
+      programId: PROGRAM_ID,
+      keys: [
+        { pubkey: payer.publicKey, isSigner: true, isWritable: true },
+        { pubkey: state, isSigner: false, isWritable: true },
+        { pubkey: mintKp.publicKey, isSigner: false, isWritable: true },
+        { pubkey: treasuryKp.publicKey, isSigner: false, isWritable: false },
+        { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+        { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+        ...mints.map(m => ({ pubkey: m, isSigner: false, isWritable: false })),
+        ...vPks.map(v => ({ pubkey: v, isSigner: false, isWritable: true })),
+      ],
+      data: cdata,
+    })), [payer]);
+
+    const userEtf = await createAccount(conn, payer, mintKp.publicKey, payer.publicKey);
+    const treasuryEtf = await createAccount(conn, payer, mintKp.publicKey, treasuryKp.publicKey);
+    return { name, state, mintKp, vPks, userEtf, treasuryEtf };
+  }
+
+  // 21. Fresh ETF + first deposit below MIN_FIRST_DEPOSIT → InsufficientFirstDeposit (9018 / 0x233A)
+  console.log("\n> Test: First deposit below MIN_FIRST_DEPOSIT (expect InsufficientFirstDeposit)");
+  {
+    const fresh = await spinUpFreshEtf("MINDEP");
+    try {
+      // amount = 1 (the attacker's cheap seed in the #35 scenario).
+      const data = Buffer.concat([
+        Buffer.from([1]),
+        u64Le(1n),
+        u64Le(0n),
+        Buffer.from([fresh.name.length]),
+        fresh.name,
+      ]);
+      await sendAndConfirmTransaction(conn, new Transaction().add(new TransactionInstruction({
+        programId: PROGRAM_ID,
+        keys: [
+          { pubkey: payer.publicKey, isSigner: true, isWritable: true },
+          { pubkey: fresh.state, isSigner: false, isWritable: true },
+          { pubkey: fresh.mintKp.publicKey, isSigner: false, isWritable: true },
+          { pubkey: fresh.userEtf, isSigner: false, isWritable: true },
+          { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+          { pubkey: fresh.treasuryEtf, isSigner: false, isWritable: true },
+          ...userTokens.map(u => ({ pubkey: u, isSigner: false, isWritable: true })),
+          ...fresh.vPks.map(v => ({ pubkey: v, isSigner: false, isWritable: true })),
+        ],
+        data,
+      })), [payer]);
+      throw new Error("Should have failed but succeeded");
+    } catch (err: any) {
+      const msg = err.message || String(err);
+      // InsufficientFirstDeposit = 9018 = 0x233A
+      if (msg.includes("0x233a") || msg.includes("9018")) {
+        console.log("  Correctly rejected with InsufficientFirstDeposit:", msg.match(/0x[0-9a-f]+/i)?.[0] ?? "9018");
+      } else if (msg === "Should have failed but succeeded") {
+        throw new Error("Tiny first deposit should have failed");
+      } else {
+        console.log("  Rejected with error (unexpected code):", msg.slice(0, 120));
+      }
+    }
+  }
+
+  // 22. Inflation/donation attack: after a legit first deposit at
+  // MIN_FIRST_DEPOSIT, an attacker donates basket tokens straight into
+  // the vault ATAs (bypassing Deposit) to try to brick the pool. With
+  // total_supply already >= MIN_FIRST_DEPOSIT, a normal-sized victim
+  // deposit must round to a non-zero mint (not ZeroDeposit), proving
+  // the pool is no longer DoS'd. Also confirms MINIMUM_LIQUIDITY is
+  // counted in total_supply but not in circulating SPL supply.
+  console.log("\n> Test: Donation attack — victim deposit must still mint > 0");
+  {
+    const fresh = await spinUpFreshEtf("DONATE");
+
+    // Legit first deposit at exactly MIN_FIRST_DEPOSIT (1 token @ 6 dp).
+    const firstData = Buffer.concat([
+      Buffer.from([1]),
+      u64Le(1_000_000n),
+      u64Le(0n),
+      Buffer.from([fresh.name.length]),
+      fresh.name,
+    ]);
+    await sendAndConfirmTransaction(conn, new Transaction().add(new TransactionInstruction({
+      programId: PROGRAM_ID,
+      keys: [
+        { pubkey: payer.publicKey, isSigner: true, isWritable: true },
+        { pubkey: fresh.state, isSigner: false, isWritable: true },
+        { pubkey: fresh.mintKp.publicKey, isSigner: false, isWritable: true },
+        { pubkey: fresh.userEtf, isSigner: false, isWritable: true },
+        { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+        { pubkey: fresh.treasuryEtf, isSigner: false, isWritable: true },
+        ...userTokens.map(u => ({ pubkey: u, isSigner: false, isWritable: true })),
+        ...fresh.vPks.map(v => ({ pubkey: v, isSigner: false, isWritable: true })),
+      ],
+      data: firstData,
+    })), [payer]);
+
+    const supplyAfterFirst = (await conn.getAccountInfo(fresh.state))!.data.readBigUInt64LE(408);
+    const userBalAfterFirst = (await getAccount(conn, fresh.userEtf)).amount;
+    console.log(`  First deposit: total_supply=${supplyAfterFirst}, user=${userBalAfterFirst}`);
+
+    // Attacker donates basket tokens straight into the vault ATAs
+    // (bypasses Deposit) at the target weight ratio so NAV deviation
+    // does not fire. Scale = 10_000x the legit leg amounts.
+    for (let i = 0; i < TOKEN_COUNT; i++) {
+      const legitLeg = 1_000_000n * BigInt(WEIGHTS[i]) / 10_000n;
+      const donation = legitLeg * 10_000n;
+      await mintTo(conn, payer, mints[i], fresh.vPks[i], payer, donation);
+    }
+
+    // Victim deposits 100 tokens. Without #35, every candidate would
+    // round to 0 and the tx would revert with ZeroDeposit. With the
+    // MIN_FIRST_DEPOSIT floor keeping total_supply bounded, the
+    // proportional math rounds to a real non-zero mint.
+    const victimData = Buffer.concat([
+      Buffer.from([1]),
+      u64Le(100_000_000n),
+      u64Le(0n),
+      Buffer.from([fresh.name.length]),
+      fresh.name,
+    ]);
+    await sendAndConfirmTransaction(conn, new Transaction().add(new TransactionInstruction({
+      programId: PROGRAM_ID,
+      keys: [
+        { pubkey: payer.publicKey, isSigner: true, isWritable: true },
+        { pubkey: fresh.state, isSigner: false, isWritable: true },
+        { pubkey: fresh.mintKp.publicKey, isSigner: false, isWritable: true },
+        { pubkey: fresh.userEtf, isSigner: false, isWritable: true },
+        { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+        { pubkey: fresh.treasuryEtf, isSigner: false, isWritable: true },
+        ...userTokens.map(u => ({ pubkey: u, isSigner: false, isWritable: true })),
+        ...fresh.vPks.map(v => ({ pubkey: v, isSigner: false, isWritable: true })),
+      ],
+      data: victimData,
+    })), [payer]);
+
+    const userBalAfterVictim = (await getAccount(conn, fresh.userEtf)).amount;
+    const mintedToVictim = userBalAfterVictim - userBalAfterFirst;
+    if (mintedToVictim === 0n) {
+      throw new Error("Victim deposit rounded to 0 — donation attack succeeded in bricking the pool");
+    }
+    console.log(`  Victim deposit after donation attack minted: ${mintedToVictim} (>0 → pool not DoS'd)`);
+  }
+
+  // 25-28 — Issue #37 (on-chain ETF metadata validation).
+  //
+  // Ticker must be ASCII upper/digit and 2..=16 bytes; name must be
+  // UTF-8 and 1..=32 bytes. Each negative case tries a CreateEtf with
+  // otherwise-valid inputs and asserts the program rejects with the
+  // correct error code.
+  async function tryBadCreate(label: string, badTicker: Buffer, badName: Buffer): Promise<string> {
+    const pdaName = Buffer.concat([Buffer.from(`${label}_`), badName]).subarray(0, 32);
+    const [pda] = PublicKey.findProgramAddressSync(
+      [Buffer.from("etf"), payer.publicKey.toBuffer(), pdaName],
+      PROGRAM_ID,
+    );
+    const mintKp = Keypair.generate();
+    await sendAndConfirmTransaction(conn, new Transaction().add(SystemProgram.createAccount({
+      fromPubkey: payer.publicKey, newAccountPubkey: mintKp.publicKey,
+      lamports: mintRent, space: MINT_SIZE, programId: TOKEN_PROGRAM_ID,
+    })), [payer, mintKp]);
+    const vKps: Keypair[] = [];
+    const vtx = new Transaction();
+    for (let i = 0; i < TOKEN_COUNT; i++) {
+      const kp = Keypair.generate();
+      vKps.push(kp);
+      vtx.add(SystemProgram.createAccount({
+        fromPubkey: payer.publicKey, newAccountPubkey: kp.publicKey,
+        lamports: vaultRent, space: ACCOUNT_SIZE, programId: TOKEN_PROGRAM_ID,
+      }));
+    }
+    await sendAndConfirmTransaction(conn, vtx, [payer, ...vKps]);
+
+    const wbuf = Buffer.alloc(TOKEN_COUNT * 2);
+    for (let i = 0; i < TOKEN_COUNT; i++) wbuf.writeUInt16LE(WEIGHTS[i], i * 2);
+    // The instruction uses a u8 length prefix, so a 300-byte ticker
+    // won't even fit — cap at 255 to still exercise the instruction
+    // handler rather than breaking on parse.
+    const cappedTicker = badTicker.subarray(0, Math.min(badTicker.length, 255));
+    const cappedName = badName.subarray(0, Math.min(badName.length, 255));
+    const data = Buffer.concat([
+      Buffer.from([0]), Buffer.from([TOKEN_COUNT]), wbuf,
+      Buffer.from([cappedTicker.length]), cappedTicker,
+      Buffer.from([cappedName.length]), cappedName,
+    ]);
+    await sendAndConfirmTransaction(conn, new Transaction().add(new TransactionInstruction({
+      programId: PROGRAM_ID,
+      keys: [
+        { pubkey: payer.publicKey, isSigner: true, isWritable: true },
+        { pubkey: pda, isSigner: false, isWritable: true },
+        { pubkey: mintKp.publicKey, isSigner: false, isWritable: true },
+        { pubkey: payer.publicKey, isSigner: false, isWritable: false },
+        { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+        { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+        ...mints.map(m => ({ pubkey: m, isSigner: false, isWritable: false })),
+        ...vKps.map(kp => ({ pubkey: kp.publicKey, isSigner: false, isWritable: true })),
+      ],
+      data,
+    })), [payer]);
+    return "";
+  }
+
+  const expectError = async (label: string, expectedHex: string, expectedCode: string,
+                             badTicker: Buffer, badName: Buffer) => {
+    console.log(`\n> Test: ${label} (expect ${expectedCode})`);
+    try {
+      await tryBadCreate(label, badTicker, badName);
+      throw new Error("Should have failed but succeeded");
+    } catch (err: any) {
+      const msg = err.message || String(err);
+      if (msg.includes(expectedHex) || msg.includes(expectedCode)) {
+        console.log(`  Correctly rejected with ${expectedCode}:`, msg.match(/0x[0-9a-f]+/i)?.[0] ?? expectedCode);
+      } else if (msg === "Should have failed but succeeded") {
+        throw new Error(`${label} should have failed`);
+      } else {
+        console.log("  Rejected with error (unexpected code):", msg.slice(0, 120));
+      }
+    }
+  };
+
+  // 25. Empty ticker — length 0 is below the 2-byte minimum.
+  // InvalidTicker = 9019 = 0x233B
+  await expectError(
+    "CreateEtf with empty ticker",
+    "0x233b", "InvalidTicker",
+    Buffer.from(""),
+    Buffer.from(`NAME${Date.now().toString(36)}`).subarray(0, 20),
+  );
+
+  // 26. Overlong ticker (17 bytes > 16 max).
+  await expectError(
+    "CreateEtf with ticker > 16 bytes",
+    "0x233b", "InvalidTicker",
+    Buffer.from("A".repeat(17)),
+    Buffer.from(`NAME${Date.now().toString(36)}`).subarray(0, 20),
+  );
+
+  // 27. Non-ASCII-upper ticker — lowercase letters must be rejected so
+  // on-chain tickers stay canonicalized.
+  await expectError(
+    "CreateEtf with lowercase ticker",
+    "0x233b", "InvalidTicker",
+    Buffer.from("axbtc"),
+    Buffer.from(`NAME${Date.now().toString(36)}`).subarray(0, 20),
+  );
+
+  // 28. Overlong name (33 bytes > 32 max). InvalidName = 9020 = 0x233C
+  await expectError(
+    "CreateEtf with name > 32 bytes",
+    "0x233c", "InvalidName",
+    Buffer.from("AXOK"),
+    Buffer.from("X".repeat(33)),
+  );
+
+  // 29 — Issue #38 (on-chain SweepTreasury instruction).
+  //
+  // After Step 17 the user fully withdrew, leaving the treasury as the
+  // only ETF holder (total_supply == treasury_etf_balance). SweepTreasury
+  // is the treasury's redemption path: it burns the treasury's full ETF
+  // balance and forwards the proportional basket tokens to treasury-owned
+  // basket ATAs (no fee, no slippage guard — this is an admin op, not a
+  // trade). Steps 18-20 are fresh-ETF error tests that don't touch the
+  // main ETF, so this state still holds going into the sweep.
+  console.log("\n> Test: SweepTreasury redeems accumulated fees");
+  {
+    // Treasury's destination basket ATAs — one per basket leg, owned by
+    // the treasury pubkey. Separate from the payer's userTokens so we
+    // can assert the sweep delivered tokens to the right owner.
+    const treasuryBasketAtas: PublicKey[] = [];
+    for (let i = 0; i < TOKEN_COUNT; i++) {
+      const ata = await createAccount(conn, payer, mints[i], treasuryKp.publicKey);
+      treasuryBasketAtas.push(ata);
+    }
+
+    const treasuryEtfBefore = (await getAccount(conn, treasuryEtfAta)).amount;
+    const totalSupplyBefore = (await conn.getAccountInfo(etfState))!.data.readBigUInt64LE(408);
+    const vaultBefore: bigint[] = [];
+    for (let i = 0; i < TOKEN_COUNT; i++) {
+      vaultBefore.push((await getAccount(conn, vaults[i])).amount);
+    }
+    console.log(`  Pre-sweep: treasury_etf=${treasuryEtfBefore}, total_supply=${totalSupplyBefore}`);
+
+    const sweepData = Buffer.concat([
+      Buffer.from([3]), // disc = SweepTreasury
+      Buffer.from([nameBytes.length]),
+      nameBytes,
+    ]);
+    const sweepTx = new Transaction().add(new TransactionInstruction({
+      programId: PROGRAM_ID,
+      keys: [
+        { pubkey: treasuryKp.publicKey, isSigner: true, isWritable: true },
+        { pubkey: etfState, isSigner: false, isWritable: true },
+        { pubkey: etfMintKp.publicKey, isSigner: false, isWritable: true },
+        { pubkey: treasuryEtfAta, isSigner: false, isWritable: true },
+        { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+        // vaults (source)
+        ...vaults.map(v => ({ pubkey: v, isSigner: false, isWritable: true })),
+        // treasury basket dests
+        ...treasuryBasketAtas.map(a => ({ pubkey: a, isSigner: false, isWritable: true })),
+      ],
+      data: sweepData,
+    }));
+    await sendAndConfirmTransaction(conn, sweepTx, [payer, treasuryKp]);
+
+    const treasuryEtfAfter = (await getAccount(conn, treasuryEtfAta)).amount;
+    const totalSupplyAfter = (await conn.getAccountInfo(etfState))!.data.readBigUInt64LE(408);
+    if (treasuryEtfAfter !== 0n) {
+      throw new Error(`Post-sweep treasury ETF balance should be 0, got ${treasuryEtfAfter}`);
+    }
+    const MINIMUM_LIQUIDITY = 1_000n;
+    if (totalSupplyAfter !== MINIMUM_LIQUIDITY) {
+      throw new Error(`Post-sweep total_supply should be ${MINIMUM_LIQUIDITY} (MINIMUM_LIQUIDITY lock), got ${totalSupplyAfter}`);
+    }
+    for (let i = 0; i < TOKEN_COUNT; i++) {
+      // Payout = vault_balance * burn_amount / total_supply (u128 truncation).
+      // With MINIMUM_LIQUIDITY locked in total_supply, the vault is NOT fully
+      // drained — a residual of vault_balance * MINIMUM_LIQUIDITY / total_supply
+      // stays behind. Compute the expected payout with the same formula and
+      // allow off-by-one for integer truncation.
+      const destBal = (await getAccount(conn, treasuryBasketAtas[i])).amount;
+      const expectedPayout = (vaultBefore[i] * treasuryEtfBefore) / totalSupplyBefore;
+      const diff = destBal > expectedPayout ? destBal - expectedPayout : expectedPayout - destBal;
+      if (diff > 1n) {
+        throw new Error(
+          `Vault ${i}: expected ≈${expectedPayout} to treasury, got ${destBal} (diff ${diff})`
+        );
+      }
+    }
+    console.log(`  Swept ${treasuryEtfBefore} ETF tokens; treasury basket ATAs funded`);
+  }
+
+  // 30. Rejection: non-treasury signer can't sweep.
+  // Uses a fresh ETF so the sweep target is isolated. SweepForbidden = 9021 = 0x233D
+  console.log("\n> Test: SweepTreasury signed by non-treasury (expect SweepForbidden)");
+  {
+    // Minimal fresh ETF to exercise the signer check only. We don't need
+    // any deposits — reusing the main-ETF treasury would require another
+    // round-trip to accrue fees.
+    const forbidName = Buffer.from(`FORBID${Date.now().toString(36).slice(-4).toUpperCase()}`);
+    const [forbidPda] = PublicKey.findProgramAddressSync(
+      [Buffer.from("etf"), payer.publicKey.toBuffer(), forbidName],
+      PROGRAM_ID,
+    );
+    const forbidMintKp = Keypair.generate();
+    await sendAndConfirmTransaction(conn, new Transaction().add(SystemProgram.createAccount({
+      fromPubkey: payer.publicKey, newAccountPubkey: forbidMintKp.publicKey,
+      lamports: mintRent, space: MINT_SIZE, programId: TOKEN_PROGRAM_ID,
+    })), [payer, forbidMintKp]);
+    const forbidVaultKps: Keypair[] = [];
+    const forbidVaultsTx = new Transaction();
+    for (let i = 0; i < TOKEN_COUNT; i++) {
+      const kp = Keypair.generate();
+      forbidVaultKps.push(kp);
+      forbidVaultsTx.add(SystemProgram.createAccount({
+        fromPubkey: payer.publicKey, newAccountPubkey: kp.publicKey,
+        lamports: vaultRent, space: ACCOUNT_SIZE, programId: TOKEN_PROGRAM_ID,
+      }));
+    }
+    await sendAndConfirmTransaction(conn, forbidVaultsTx, [payer, ...forbidVaultKps]);
+    const forbidTreasuryKp = Keypair.generate();
+    await sendAndConfirmTransaction(conn, new Transaction().add(
+      SystemProgram.transfer({ fromPubkey: payer.publicKey, toPubkey: forbidTreasuryKp.publicKey, lamports: LAMPORTS_PER_SOL / 20 })
+    ), [payer]);
+
+    const forbidWbuf = Buffer.alloc(TOKEN_COUNT * 2);
+    for (let i = 0; i < TOKEN_COUNT; i++) forbidWbuf.writeUInt16LE(WEIGHTS[i], i * 2);
+    const forbidTickerBytes = Buffer.from("AX");
+    await sendAndConfirmTransaction(conn, new Transaction().add(new TransactionInstruction({
+      programId: PROGRAM_ID,
+      keys: [
+        { pubkey: payer.publicKey, isSigner: true, isWritable: true },
+        { pubkey: forbidPda, isSigner: false, isWritable: true },
+        { pubkey: forbidMintKp.publicKey, isSigner: false, isWritable: true },
+        { pubkey: forbidTreasuryKp.publicKey, isSigner: false, isWritable: false },
+        { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+        { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+        ...mints.map(m => ({ pubkey: m, isSigner: false, isWritable: false })),
+        ...forbidVaultKps.map(kp => ({ pubkey: kp.publicKey, isSigner: false, isWritable: true })),
+      ],
+      data: Buffer.concat([
+        Buffer.from([0]), Buffer.from([TOKEN_COUNT]), forbidWbuf,
+        Buffer.from([forbidTickerBytes.length]), forbidTickerBytes,
+        Buffer.from([forbidName.length]), forbidName,
+      ]),
+    })), [payer]);
+
+    // To exercise the SweepForbidden path we need a populated treasury
+    // ETF ATA. Create it, deposit once to accrue a fee, then try to
+    // sweep with the wrong signer (payer, not the stored treasury).
+    const forbidTreasuryEtf = await createAccount(
+      conn, payer, forbidMintKp.publicKey, forbidTreasuryKp.publicKey,
+    );
+    const forbidUserEtf = await createAccount(
+      conn, payer, forbidMintKp.publicKey, payer.publicKey,
+    );
+    await sendAndConfirmTransaction(conn, new Transaction().add(new TransactionInstruction({
+      programId: PROGRAM_ID,
+      keys: [
+        { pubkey: payer.publicKey, isSigner: true, isWritable: true },
+        { pubkey: forbidPda, isSigner: false, isWritable: true },
+        { pubkey: forbidMintKp.publicKey, isSigner: false, isWritable: true },
+        { pubkey: forbidUserEtf, isSigner: false, isWritable: true },
+        { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+        { pubkey: forbidTreasuryEtf, isSigner: false, isWritable: true },
+        ...userTokens.map(u => ({ pubkey: u, isSigner: false, isWritable: true })),
+        ...forbidVaultKps.map(kp => ({ pubkey: kp.publicKey, isSigner: false, isWritable: true })),
+      ],
+      data: Buffer.concat([
+        Buffer.from([1]),
+        u64Le(100_000_000n),
+        u64Le(0n),
+        Buffer.from([forbidName.length]), forbidName,
+      ]),
+    })), [payer]);
+
+    // Wrong-signer sweep: payer signs, but payer.publicKey != etf.treasury.
+    const forbidBasketAtas: PublicKey[] = [];
+    for (let i = 0; i < TOKEN_COUNT; i++) {
+      forbidBasketAtas.push(await createAccount(conn, payer, mints[i], forbidTreasuryKp.publicKey));
+    }
+    try {
+      await sendAndConfirmTransaction(conn, new Transaction().add(new TransactionInstruction({
+        programId: PROGRAM_ID,
+        keys: [
+          { pubkey: payer.publicKey, isSigner: true, isWritable: true }, // WRONG signer
+          { pubkey: forbidPda, isSigner: false, isWritable: true },
+          { pubkey: forbidMintKp.publicKey, isSigner: false, isWritable: true },
+          { pubkey: forbidTreasuryEtf, isSigner: false, isWritable: true },
+          { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+          ...forbidVaultKps.map(kp => ({ pubkey: kp.publicKey, isSigner: false, isWritable: true })),
+          ...forbidBasketAtas.map(a => ({ pubkey: a, isSigner: false, isWritable: true })),
+        ],
+        data: Buffer.concat([
+          Buffer.from([3]), Buffer.from([forbidName.length]), forbidName,
+        ]),
+      })), [payer]);
+      throw new Error("Should have failed but succeeded");
+    } catch (err: any) {
+      const msg = err.message || String(err);
+      // SweepForbidden = 9021 = 0x233D
+      if (msg.includes("0x233d") || msg.includes("9021")) {
+        console.log("  Correctly rejected with SweepForbidden:", msg.match(/0x[0-9a-f]+/i)?.[0] ?? "9021");
+      } else if (msg === "Should have failed but succeeded") {
+        throw new Error("SweepTreasury with wrong signer should have failed");
+      } else {
+        console.log("  Rejected with error (unexpected code):", msg.slice(0, 120));
+      }
     }
   }
 

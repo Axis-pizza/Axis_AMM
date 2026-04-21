@@ -41,6 +41,14 @@ pub enum PfmmError {
     OracleOwnerMismatch = 6017,
     /// Pool is paused
     PoolPaused = 6018,
+    /// InitializePool base_fee_bps ≥ 10_000 (fee ≥ 100%)
+    InvalidFeeBps = 6019,
+    /// Vault account does not match pool.vault_a / pool.vault_b
+    VaultMismatch = 6020,
+    /// Jito bid is below MIN_BID_LAMPORTS
+    BidTooLow = 6021,
+    /// next_window_end would overflow u64
+    WindowEndOverflow = 6022,
 }
 
 impl From<PfmmError> for ProgramError {

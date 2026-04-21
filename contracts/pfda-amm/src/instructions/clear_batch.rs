@@ -46,22 +46,31 @@ pub fn process_clear_batch(program_id: &Pubkey, accounts: &[AccountInfo], bid_la
     // If bid_lamports > 0 and accounts[8] is a protocol treasury,
     // transfer SOL from cranker to treasury. This is the searcher's payment
     // for exclusive clearing rights in this batch window.
-    if bid_lamports > 0 && accounts.len() > 8 {
-        let treasury = &accounts[8];
-
-        // Transfer SOL from cranker to treasury via system program CPI
-        pinocchio_system::instructions::Transfer {
-            from: cranker,
-            to: treasury,
-            lamports: bid_lamports,
+    //
+    // #33: MIN_BID_LAMPORTS was never enforced on pfda-amm — pfda-amm-3's
+    // ClearBatch already has the check; mirror it here so anti-spam
+    // parity holds across both programs.
+    if bid_lamports > 0 {
+        if bid_lamports < crate::jito::MIN_BID_LAMPORTS {
+            return Err(PfmmError::BidTooLow.into());
         }
-        .invoke()?;
+        if accounts.len() > 8 {
+            let treasury = &accounts[8];
 
-        // Compute revenue split for accounting
-        let (_protocol_share, _lp_share) = crate::jito::compute_bid_split(
-            bid_lamports,
-            crate::jito::DEFAULT_ALPHA_BPS,
-        );
+            // Transfer SOL from cranker to treasury via system program CPI
+            pinocchio_system::instructions::Transfer {
+                from: cranker,
+                to: treasury,
+                lamports: bid_lamports,
+            }
+            .invoke()?;
+
+            // Compute revenue split for accounting
+            let (_protocol_share, _lp_share) = crate::jito::compute_bid_split(
+                bid_lamports,
+                crate::jito::DEFAULT_ALPHA_BPS,
+            );
+        }
     }
 
     if !cranker.is_signer() {
@@ -208,8 +217,16 @@ pub fn process_clear_batch(program_id: &Pubkey, accounts: &[AccountInfo], bid_la
                 // The clearing price is bounded by the oracle price to prevent
                 // manipulation: |clearing - oracle| <= max_deviation.
                 let effective_cp = if let Some((price_a, price_b)) = oracle_prices {
-                    // Oracle-derived market price: B per A = price_a / price_b
-                    let oracle_price = fp_div(fp_from_int(price_a >> 32), fp_from_int((price_b >> 32).max(1)));
+                    // Oracle-derived market price: B per A = price_a / price_b.
+                    // price_a / price_b are already Q32.32 (see oracle::read_switchboard_price);
+                    // dividing them with fp_div yields a Q32.32 ratio directly.
+                    //
+                    // The previous version applied `>> 32` to both sides before the
+                    // divide, which collapsed the integer part of each price and
+                    // (for sub-dollar tokens) rounded the price to 0, causing the
+                    // numerator or denominator to degenerate. Kidney flagged this
+                    // in #33.
+                    let oracle_price = fp_div(price_a, price_b.max(1));
                     // Use the G3M price but clamp to within 5% of oracle
                     let max_dev_bps: u64 = 500; // 5%
                     let lower = oracle_price.saturating_sub(oracle_price * max_dev_bps / 10_000);
@@ -309,7 +326,11 @@ pub fn process_clear_batch(program_id: &Pubkey, accounts: &[AccountInfo], bid_la
         .checked_add(1)
         .ok_or(PfmmError::Overflow)?;
     let next_batch_id_bytes = next_batch_id.to_le_bytes();
-    let next_window_end = current_window_end + window_slots;
+    // #33: unchecked u64 addition. Pool would brick once current_window_end
+    // approaches u64::MAX (or on a malformed pool state).
+    let next_window_end = current_window_end
+        .checked_add(window_slots)
+        .ok_or(PfmmError::WindowEndOverflow)?;
 
     let (expected_new_queue, new_queue_bump) = pubkey::find_program_address(
         &[b"queue", &pool_key, &next_batch_id_bytes],

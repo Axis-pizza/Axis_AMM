@@ -365,3 +365,104 @@ fn swap_request_rejects_when_paused() {
     // PR #47 specifically changed this from InvalidDiscriminator to PoolPaused.
     assert_custom_err(&err, ERR_POOL_PAUSED, "paused-pool rejection");
 }
+
+// ─── pfda-amm-3 InitializePool rejection paths ─────────────────────────
+
+const ERR_INVALID_FEE_BPS: u32 = 8033;
+const ERR_ALREADY_INITIALIZED: u32 = 8015;
+
+fn pfda3_init_ix_bogus(
+    payer: &Keypair,
+    base_fee_bps: u16,
+    pool: Address,
+) -> Instruction {
+    // Data layout: [base_fee_bps: u16][window_slots: u64][w0..w2: u32 each]
+    let mut data = vec![0u8]; // InitializePool
+    data.extend_from_slice(&base_fee_bps.to_le_bytes());
+    data.extend_from_slice(&10u64.to_le_bytes()); // window_slots
+    data.extend_from_slice(&333_333u32.to_le_bytes());
+    data.extend_from_slice(&333_333u32.to_le_bytes());
+    data.extend_from_slice(&333_334u32.to_le_bytes());
+
+    // 12-account minimum. base_fee_bps=10_000 rejection fires before
+    // any account is read, so unique fresh keys are enough.
+    let mut accts = vec![
+        AccountMeta::new(payer.pubkey(), true),
+        AccountMeta::new(pool, false),
+    ];
+    // queue + 3 mints + 3 vaults + treasury = 8 more
+    for _ in 0..8 {
+        accts.push(AccountMeta::new(Address::new_unique(), false));
+    }
+    accts.push(AccountMeta::new_readonly(system_program_id(), false));
+    accts.push(AccountMeta::new_readonly(token_program_id(), false));
+
+    Instruction { program_id: pfda3_id(), accounts: accts, data }
+}
+
+#[test]
+fn pfda3_init_rejects_fee_100_percent() {
+    require_fixture!(PFDA_AMM_3_SO);
+    let mut svm = LiteSVM::new();
+    if !std::path::Path::new(PFDA_AMM_3_SO).exists() { return; }
+    svm.add_program_from_file(pfda3_id(), PFDA_AMM_3_SO).unwrap();
+    let payer = Keypair::new();
+    svm.airdrop(&payer.pubkey(), LAMPORTS_PER_SOL).unwrap();
+
+    let bogus_pool = Address::new_unique();
+    let err = send(
+        &mut svm,
+        pfda3_init_ix_bogus(&payer, 10_000, bogus_pool),
+        &payer,
+    )
+    .err()
+    .expect("base_fee_bps=10_000 should reject");
+    assert_custom_err(&err, ERR_INVALID_FEE_BPS, "pfda3 fee=100%");
+}
+
+#[test]
+fn pfda3_init_rejects_duplicate() {
+    require_fixture!(PFDA_AMM_3_SO);
+    // Pre-seed the pool PDA via the seed helper so the discriminator
+    // check fires AlreadyInitialized.
+    let Fixture { mut svm, payer, pool, mints, vaults: _, user_tokens: _ } =
+        match seed_pool(false) { Some(f) => f, None => return };
+
+    // PoolState3 seeds are [b"pool3", mints[0], mints[1], mints[2]] —
+    // the ix won't find the declared pool unless we use the same PDA.
+    let mut data = vec![0u8];
+    data.extend_from_slice(&30u16.to_le_bytes());
+    data.extend_from_slice(&10u64.to_le_bytes());
+    data.extend_from_slice(&333_333u32.to_le_bytes());
+    data.extend_from_slice(&333_333u32.to_le_bytes());
+    data.extend_from_slice(&333_334u32.to_le_bytes());
+
+    let queue = Address::new_unique();
+    let v = [Address::new_unique(), Address::new_unique(), Address::new_unique()];
+
+    let err = send(
+        &mut svm,
+        Instruction {
+            program_id: pfda3_id(),
+            accounts: vec![
+                AccountMeta::new(payer.pubkey(), true),
+                AccountMeta::new(pool, false),
+                AccountMeta::new(queue, false),
+                AccountMeta::new_readonly(mints[0], false),
+                AccountMeta::new_readonly(mints[1], false),
+                AccountMeta::new_readonly(mints[2], false),
+                AccountMeta::new(v[0], false),
+                AccountMeta::new(v[1], false),
+                AccountMeta::new(v[2], false),
+                AccountMeta::new_readonly(Address::new_unique(), false), // treasury
+                AccountMeta::new_readonly(system_program_id(), false),
+                AccountMeta::new_readonly(token_program_id(), false),
+            ],
+            data,
+        },
+        &payer,
+    )
+    .err()
+    .expect("duplicate init should reject");
+    assert_custom_err(&err, ERR_ALREADY_INITIALIZED, "pfda3 duplicate init");
+}

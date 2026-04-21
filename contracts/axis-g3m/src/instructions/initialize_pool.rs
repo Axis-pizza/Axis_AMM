@@ -10,6 +10,7 @@ use pinocchio_system::instructions::CreateAccount;
 use pinocchio_token::instructions::Transfer;
 
 use crate::error::G3mError;
+use crate::security::verify_token_account_owner;
 use crate::state::{G3mPoolState, MAX_POOL_TOKENS};
 
 /// InitializePool — create a G3M pool with up to 5 tokens.
@@ -115,10 +116,18 @@ pub fn process_initialize_pool(
     }
     .invoke_signed(&signers)?;
 
-    // Transfer initial reserves from authority to vaults
+    // #33: source token accounts were trusted blindly — their owner
+    // (program id on the account) was never verified. A non-Token-
+    // Program account with crafted bytes at offsets 0..32 could spoof
+    // the mint read on line ~143 below and plant a bogus token_mint
+    // into pool.token_mints[i]. Verify the SPL-Token owner on each
+    // source (and each vault, for symmetry) before any transfer or
+    // mint read.
     for i in 0..tc {
         let source = &accounts[4 + i];
         let vault = &accounts[4 + tc + i];
+        verify_token_account_owner(source)?;
+        verify_token_account_owner(vault)?;
 
         Transfer {
             from: source,

@@ -29,7 +29,19 @@ pub fn process_close_batch_history(
         return Err(ProgramError::MissingRequiredSignature);
     }
 
-    // Read current_batch_id from pool
+    // #33 flagged that `pool_ai` was never re-derived as a PDA and
+    // `history.pool` was never compared to `pool_ai.key()`. An attacker
+    // could hand in a fake program-owned account whose `current_batch_id`
+    // makes the close-delay already look elapsed, then close a real
+    // history account siphoned from an unrelated pool. Verify pool
+    // ownership + PDA seeds, and require the stored `history.pool` to
+    // match.
+    if pool_ai.owner() != program_id {
+        return Err(ProgramError::IllegalOwner);
+    }
+
+    // Read current_batch_id from pool and verify the pool itself is
+    // a canonical PDA derived from its own recorded mint pair.
     let current_batch_id = {
         let data = pool_ai.try_borrow_data()?;
         let pool = unsafe { load::<PoolState>(&data) }
@@ -37,16 +49,27 @@ pub fn process_close_batch_history(
         if !pool.is_initialized() {
             return Err(PfmmError::InvalidDiscriminator.into());
         }
+        let (expected_pool, _) = pubkey::find_program_address(
+            &[b"pool", &pool.token_a_mint, &pool.token_b_mint],
+            program_id,
+        );
+        if pool_ai.key() != &expected_pool {
+            return Err(ProgramError::InvalidSeeds);
+        }
         pool.current_batch_id
     };
 
-    // Read batch_id from history and verify PDA
+    // Read batch_id from history and verify its stored pool matches
+    // the pool_ai we just validated.
     let history_batch_id = {
         let data = history_ai.try_borrow_data()?;
         let hist = unsafe { load::<ClearedBatchHistory>(&data) }
             .ok_or(ProgramError::InvalidAccountData)?;
         if !hist.is_initialized() {
             return Err(PfmmError::InvalidDiscriminator.into());
+        }
+        if &hist.pool != pool_ai.key().as_ref() {
+            return Err(PfmmError::PoolMismatch.into());
         }
         hist.batch_id
     };

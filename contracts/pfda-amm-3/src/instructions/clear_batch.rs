@@ -210,10 +210,23 @@ fn clear_batch_inner(
         let ri = reserves[i].max(1) as u128;
         let wi = weights[i].max(1) as u128;
 
+        // #33: the old code did `as u64` on a u128 divide that can
+        // exceed u64 when reserves span different decimals
+        // (e.g. BONK vs SOL). Silent truncation would hand back a
+        // tiny clearing price and drain the vault on Claim. Detect
+        // and fail explicitly.
         let reserve_price = if i == 0 {
             1u64 << 32
         } else {
-            ((r0 * wi * (1u128 << 32)) / (ri * w0)) as u64
+            let raw = r0
+                .checked_mul(wi).ok_or(Pfda3Error::Overflow)?
+                .checked_mul(1u128 << 32).ok_or(Pfda3Error::Overflow)?
+                .checked_div(ri.checked_mul(w0).ok_or(Pfda3Error::Overflow)?)
+                .ok_or(Pfda3Error::DivisionByZero)?;
+            if raw > u64::MAX as u128 {
+                return Err(Pfda3Error::Overflow.into());
+            }
+            raw as u64
         };
 
         let effective_price = if let Some(ref oracle_px) = oracle_prices {
@@ -252,7 +265,17 @@ fn clear_batch_inner(
             new_reserves[i] = new_reserves[i].checked_add(total_in[i])
                 .ok_or(Pfda3Error::Overflow)?;
 
-            let value_in = (total_in[i] as u128) * (clearing_prices[i] as u128) >> 32;
+            // #33: total_out[i] narrowed via `as u64` with no overflow
+            // check. Oracle-bound prices make this rare, but a
+            // pathological (total_in, clearing_prices) combo during a
+            // wide batch could still truncate and lie to Claim.
+            let value_in = (total_in[i] as u128)
+                .checked_mul(clearing_prices[i] as u128)
+                .ok_or(Pfda3Error::Overflow)?
+                >> 32;
+            if value_in > u64::MAX as u128 {
+                return Err(Pfda3Error::Overflow.into());
+            }
             total_out[i] = value_in as u64;
         }
     }

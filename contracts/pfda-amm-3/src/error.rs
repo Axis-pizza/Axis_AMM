@@ -45,6 +45,9 @@ pub enum Pfda3Error {
     /// PDA substitution: passed-in account does not match the PDA
     /// derived from the declared seeds (#33 claim history/ticket)
     PdaMismatch = 8034,
+    /// Caller is not authorized for this instruction (#33
+    /// CloseBatchHistory rent-recipient restriction)
+    Unauthorized = 8035,
 }
 
 impl From<Pfda3Error> for ProgramError {

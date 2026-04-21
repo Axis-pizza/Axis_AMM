@@ -102,6 +102,63 @@ pub fn process_swap_request(
         return Err(ProgramError::InvalidSeeds);
     }
 
+    // #33 flagged that the original order issued the Transfer before
+    // CreateAccount. A user calling SwapRequest twice in the same batch
+    // would have their second transfer succeed but the second
+    // CreateAccount fail with "account in use" — stranding the second
+    // deposit in the vault. Reordering so ticket creation lands first
+    // makes duplicate calls fail atomically (Transfer never runs).
+    let user_key = user.key();
+    let (expected_ticket, ticket_bump) = pubkey::find_program_address(
+        &[b"ticket", &pool_key, user_key, &batch_id_bytes],
+        program_id,
+    );
+    if ticket_ai.key() != &expected_ticket {
+        return Err(ProgramError::InvalidSeeds);
+    }
+
+    let rent = Rent::get()?;
+    let ticket_lamports = rent.minimum_balance(UserOrderTicket::LEN);
+
+    let ticket_bump_seed = [ticket_bump];
+    let ticket_signer_seeds = [
+        Seed::from(b"ticket".as_ref()),
+        Seed::from(pool_key.as_ref()),
+        Seed::from(user_key.as_ref()),
+        Seed::from(batch_id_bytes.as_ref()),
+        Seed::from(ticket_bump_seed.as_ref()),
+    ];
+
+    CreateAccount {
+        from: user,
+        to: ticket_ai,
+        lamports: ticket_lamports,
+        space: UserOrderTicket::LEN as u64,
+        owner: program_id,
+    }
+    .invoke_signed(&[Signer::from(&ticket_signer_seeds)])?;
+
+    // Initialize ticket (before transfer — if transfer reverts, the
+    // whole tx reverts and the ticket is unwound atomically).
+    {
+        let mut data = ticket_ai.try_borrow_mut_data()?;
+        let ticket = unsafe { load_mut::<UserOrderTicket>(&mut data) }
+            .ok_or(ProgramError::InvalidAccountData)?;
+
+        *ticket = UserOrderTicket {
+            discriminator: UserOrderTicket::DISCRIMINATOR,
+            owner: *user_key,
+            pool: pool_key,
+            batch_id: current_batch_id,
+            amount_in_a,
+            amount_in_b,
+            min_amount_out,
+            is_claimed: false,
+            bump: ticket_bump,
+            _padding: [0; 6],
+        };
+    }
+
     // Transfer tokens into vault
     if amount_in_a > 0 {
         Transfer {
@@ -142,57 +199,6 @@ pub fn process_swap_request(
             .total_in_b
             .checked_add(amount_in_b)
             .ok_or(PfmmError::Overflow)?;
-    }
-
-    // Create UserOrderTicket PDA
-    let user_key = user.key();
-    let (expected_ticket, ticket_bump) = pubkey::find_program_address(
-        &[b"ticket", &pool_key, user_key, &batch_id_bytes],
-        program_id,
-    );
-    if ticket_ai.key() != &expected_ticket {
-        return Err(ProgramError::InvalidSeeds);
-    }
-
-    let rent = Rent::get()?;
-    let ticket_lamports = rent.minimum_balance(UserOrderTicket::LEN);
-
-    let ticket_bump_seed = [ticket_bump];
-    let ticket_signer_seeds = [
-        Seed::from(b"ticket".as_ref()),
-        Seed::from(pool_key.as_ref()),
-        Seed::from(user_key.as_ref()),
-        Seed::from(batch_id_bytes.as_ref()),
-        Seed::from(ticket_bump_seed.as_ref()),
-    ];
-
-    CreateAccount {
-        from: user,
-        to: ticket_ai,
-        lamports: ticket_lamports,
-        space: UserOrderTicket::LEN as u64,
-        owner: program_id,
-    }
-    .invoke_signed(&[Signer::from(&ticket_signer_seeds)])?;
-
-    // Initialize ticket
-    {
-        let mut data = ticket_ai.try_borrow_mut_data()?;
-        let ticket = unsafe { load_mut::<UserOrderTicket>(&mut data) }
-            .ok_or(ProgramError::InvalidAccountData)?;
-
-        *ticket = UserOrderTicket {
-            discriminator: UserOrderTicket::DISCRIMINATOR,
-            owner: *user_key,
-            pool: pool_key,
-            batch_id: current_batch_id,
-            amount_in_a,
-            amount_in_b,
-            min_amount_out,
-            is_claimed: false,
-            bump: ticket_bump,
-            _padding: [0; 6],
-        };
     }
 
     Ok(())

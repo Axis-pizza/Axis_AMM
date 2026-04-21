@@ -38,13 +38,24 @@ pub fn process_claim_3(program_id: &Pubkey, accounts: &[AccountInfo]) -> Program
         return Err(ProgramError::MissingRequiredSignature);
     }
 
-    // Load pool for PDA signer seeds, vaults, and mints
+    // Load pool for PDA signer seeds, vaults, and mints. #33: Claim
+    // was missing the paused + reentrancy checks that AddLiquidity /
+    // ClearBatch already perform. Paused pools should freeze the full
+    // lifecycle, not just deposits, and the reentrancy guard catches
+    // a re-entry from the vault Transfer CPI just like it does in
+    // ClearBatch.
     let (pool_key, pool_bump, token_mints, vaults) = {
         let data = pool_ai.try_borrow_data()?;
         let pool = unsafe { load::<PoolState3>(&data) }
             .ok_or(ProgramError::InvalidAccountData)?;
         if !pool.is_initialized() {
             return Err(Pfda3Error::InvalidDiscriminator.into());
+        }
+        if pool.reentrancy_guard != 0 {
+            return Err(Pfda3Error::ReentrancyDetected.into());
+        }
+        if pool.paused != 0 {
+            return Err(Pfda3Error::PoolPaused.into());
         }
         (*pool_ai.key(), pool.bump, pool.token_mints, pool.vaults)
     };

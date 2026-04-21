@@ -69,6 +69,7 @@ jobs:
           cd contracts/axis-g3m && cargo build-sbf
           cd ../pfda-amm-3 && cargo build-sbf
           cd ../pfda-amm && cargo build-sbf
+          cd ../axis-vault && cargo build-sbf
 
       - name: Dump Jupiter V6 from mainnet
         run: |
@@ -119,6 +120,19 @@ jobs:
           cd contracts/ab-integration-tests
           cargo test --test axis_g3m_coverage -- --nocapture
 
+      # pfda-amm-3 Claim — slippage exceeded + zero-volume token short-circuit.
+      - name: Run pfda-amm-3 Claim regression tests (LiteSVM)
+        run: |
+          cd contracts/ab-integration-tests
+          cargo test --test pfda3_claim_coverage -- --nocapture
+
+      # axis-vault — CreateEtf data-validation branches (basket size, weights,
+      # ticker, name). All fire before any CPI so no SPL setup required.
+      - name: Run axis-vault regression tests (LiteSVM)
+        run: |
+          cd contracts/ab-integration-tests
+          cargo test --test axis_vault_coverage -- --nocapture
+
       - name: Generate LiteSVM A/B report
         run: |
           cd contracts/ab-integration-tests
@@ -151,6 +165,19 @@ jobs:
       - name: Run mainnet-fork E2E (solana-test-validator)
         run: |
           RPC_URL=http://localhost:8899 bun test/e2e/axis-g3m/axis-g3m.jupiter-fork.e2e.ts
+
+      # axis-vault mainnet-fork check (#36): PR #42 shipped the
+      # client-bundled SOL-in / SOL-out flow with stub tests only. This
+      # step exercises the real Jupiter quote API + ALT resolution against
+      # a live Jupiter program cloned into the forked validator. demo.ts
+      # builds the versioned tx but does not sign/send — it's a structural
+      # validator for the Jupiter path and tx size/layout.
+      - name: Run axis-vault Jupiter mainnet-fork check
+        run: |
+          RPC_URL=http://localhost:8899 \
+          JUPITER_HOST=https://quote-api.jup.ag \
+            bun scripts/axis-vault/demo.ts
+        continue-on-error: true  # external Jupiter API flakiness ≠ repo regression
 
       - name: Stop forked validator
         if: always()

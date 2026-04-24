@@ -35,6 +35,10 @@ path = "tests/pfda3_claim_coverage.rs"
 name = "axis_vault_coverage"
 path = "tests/axis_vault_coverage.rs"
 
+[[test]]
+name = "issue_59_coverage"
+path = "tests/issue_59_coverage.rs"
+
 [dependencies]
 litesvm = "0.11"
 solana-keypair = "3.1"

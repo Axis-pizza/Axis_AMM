@@ -4,6 +4,7 @@ pub mod clear_batch;
 pub mod close_batch_history;
 pub mod close_expired_ticket;
 pub mod initialize_pool;
+pub mod set_paused;
 pub mod swap_request;
 pub mod withdraw_fees;
 
@@ -13,5 +14,6 @@ pub use clear_batch::process_clear_batch_3;
 pub use close_batch_history::process_close_batch_history_3;
 pub use close_expired_ticket::process_close_expired_ticket_3;
 pub use initialize_pool::process_initialize_pool_3;
+pub use set_paused::process_set_paused_3;
 pub use swap_request::process_swap_request_3;
 pub use withdraw_fees::process_withdraw_fees;

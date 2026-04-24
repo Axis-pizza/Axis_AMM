@@ -37,6 +37,10 @@ enum Instruction {
     CheckDrift = 2,
     Rebalance = 3,
     RebalanceViaJupiter = 4,
+    /// #59: authority-gated pause toggle. Mirrors pfda-amm /
+    /// pfda-amm-3 / axis-vault. The `paused` byte on G3mPoolState
+    /// was dead without this ix — no emergency-stop path existed.
+    SetPaused = 5,
 }
 
 impl Instruction {
@@ -47,6 +51,7 @@ impl Instruction {
             2 => Some(Instruction::CheckDrift),
             3 => Some(Instruction::Rebalance),
             4 => Some(Instruction::RebalanceViaJupiter),
+            5 => Some(Instruction::SetPaused),
             _ => None,
         }
     }
@@ -186,6 +191,13 @@ pub fn process_instruction(
             let jupiter_data = &data[4..4 + jup_len];
 
             jupiter::process_rebalance_via_jupiter(program_id, accounts, jupiter_data)
+        }
+
+        Instruction::SetPaused => {
+            if data.is_empty() {
+                return Err(ProgramError::InvalidInstructionData);
+            }
+            instructions::process_set_paused(program_id, accounts, data[0])
         }
     }
 }

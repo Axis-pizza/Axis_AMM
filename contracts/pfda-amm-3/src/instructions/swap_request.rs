@@ -64,6 +64,16 @@ pub fn process_swap_request_3(
             // the dedicated PoolPaused code instead.
             return Err(Pfda3Error::PoolPaused.into());
         }
+        // #59: previously this only checked the vault mint via
+        // verify_token_account_mint, which left SwapRequest open to
+        // vault-key spoofing — a crafted token account of the right
+        // mint could be passed in as the destination and user tokens
+        // would land there while the batch queue still incremented.
+        // Assert the key equals the pool's stored vault for this token
+        // index before any Transfer runs.
+        if vault.key().as_ref() != &pool.vaults[in_token_idx as usize] {
+            return Err(Pfda3Error::VaultMismatch.into());
+        }
         // Security rule 7: verify vault mint matches pool token
         crate::security::verify_token_account_mint(vault, &pool.token_mints[in_token_idx as usize])?;
         (*pool_ai.key(), pool.current_batch_id, pool.current_window_end)

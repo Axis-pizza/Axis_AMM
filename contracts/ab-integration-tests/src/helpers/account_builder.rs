@@ -125,7 +125,7 @@ pub fn build_pfda3_pool_state(
 }
 
 /// Build PoolState raw bytes for pfda-amm (the 2-token legacy program).
-/// Layout (240 bytes, repr(C)) per contracts/pfda-amm/src/state/pool_state.rs:
+/// Layout (272 bytes, repr(C)) per contracts/pfda-amm/src/state/pool_state.rs:
 ///   0:    discriminator "poolstat" (8)
 ///   8:    token_a_mint (32)
 ///  40:    token_b_mint (32)
@@ -147,6 +147,11 @@ pub fn build_pfda3_pool_state(
 /// 237:    reentrancy_guard (u8)
 /// 238:    paused (u8)
 /// 239:    _padding (u8)
+/// 240:    treasury (32)        ← #61 item 4 migration
+///
+/// Pass `treasury = None` to leave the field zeroed (legacy fallback —
+/// ClearBatch will use `authority` as the bid recipient). Pass `Some(addr)`
+/// to populate it for v2 behaviour.
 #[allow(clippy::too_many_arguments)]
 pub fn build_pfda_pool_state(
     token_a_mint: &Address,
@@ -163,7 +168,37 @@ pub fn build_pfda_pool_state(
     authority: &Address,
     bump: u8,
 ) -> Vec<u8> {
-    let mut d = vec![0u8; 240];
+    build_pfda_pool_state_v2(
+        token_a_mint, token_b_mint, vault_a, vault_b,
+        reserve_a, reserve_b, weight_a,
+        window_slots, current_batch_id, current_window_end,
+        base_fee_bps, authority, bump,
+        None,
+    )
+}
+
+/// Same as `build_pfda_pool_state` but with an explicit `treasury` slot
+/// for tests that need to exercise the post-migration bid-recipient
+/// path (#61 item 4). `None` produces the legacy zeroed treasury that
+/// falls back to `authority`.
+#[allow(clippy::too_many_arguments)]
+pub fn build_pfda_pool_state_v2(
+    token_a_mint: &Address,
+    token_b_mint: &Address,
+    vault_a: &Address,
+    vault_b: &Address,
+    reserve_a: u64,
+    reserve_b: u64,
+    weight_a: u32,
+    window_slots: u64,
+    current_batch_id: u64,
+    current_window_end: u64,
+    base_fee_bps: u16,
+    authority: &Address,
+    bump: u8,
+    treasury: Option<&Address>,
+) -> Vec<u8> {
+    let mut d = vec![0u8; 272];
     d[0..8].copy_from_slice(b"poolstat");
     d[8..40].copy_from_slice(token_a_mint.as_ref());
     d[40..72].copy_from_slice(token_b_mint.as_ref());
@@ -182,6 +217,9 @@ pub fn build_pfda_pool_state(
     d[204..236].copy_from_slice(authority.as_ref());
     d[236] = bump;
     // reentrancy_guard / paused / pad zero
+    if let Some(t) = treasury {
+        d[240..272].copy_from_slice(t.as_ref());
+    }
     d
 }
 

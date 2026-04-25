@@ -24,6 +24,7 @@ use crate::{
 /// 6. `[writable]`          vault_b  (SPL token account, uninitialized)
 /// 7. `[]`                  system_program
 /// 8. `[]`                  token_program
+#[allow(clippy::too_many_arguments)]
 pub fn process_initialize_pool(
     program_id: &Pubkey,
     accounts: &[AccountInfo],
@@ -31,6 +32,7 @@ pub fn process_initialize_pool(
     fee_discount_bps: u16,
     window_slots: u64,
     initial_weight_a: u32,
+    treasury: [u8; 32],
 ) -> ProgramResult {
     if window_slots == 0 {
         return Err(PfmmError::InvalidWindowSlots.into());
@@ -135,6 +137,7 @@ pub fn process_initialize_pool(
             reentrancy_guard: 0,
             paused: 0,
             _padding: [0; 1],
+            treasury,
         };
     }
 

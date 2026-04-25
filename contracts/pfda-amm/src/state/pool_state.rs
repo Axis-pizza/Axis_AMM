@@ -1,6 +1,15 @@
-/// PoolState - 244 bytes, repr(C)
+/// PoolState - 272 bytes, repr(C)
 ///
 /// PDA seeds: [b"pool", token_a_mint, token_b_mint]
+///
+/// Layout note (#61 item 4): `treasury` was added at the end so the
+/// fields preceding it keep their existing offsets — the migration
+/// extends rather than rewrites. PoolState went from 240 bytes (ends
+/// at `_padding`) to 272 bytes (ends at `treasury`). Existing
+/// devnet pools created before the migration carry zeroed treasury
+/// bytes; ClearBatch falls back to `pool.authority` when treasury
+/// is the zero key, preserving backward compatibility for the alpha
+/// while live mainnet pools (none yet) ship with a real treasury.
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct PoolState {
@@ -46,6 +55,13 @@ pub struct PoolState {
     pub paused: u8,
     /// Alignment padding
     pub _padding: [u8; 1],
+    /// Bid-recipient pubkey (#61 item 4). Mirrors pfda-amm-3's separate
+    /// `treasury` field. ClearBatch sends Jito bids here; if zero,
+    /// the pre-migration fallback uses `authority` as the recipient
+    /// to keep older pools functional during the alpha. Once
+    /// PROTOCOL_TREASURY is live (#38), all new InitializePool calls
+    /// must populate this field with the multisig key.
+    pub treasury: [u8; 32],
 }
 
 impl PoolState {
@@ -79,8 +95,8 @@ impl PoolState {
     }
 }
 
-// Compile-time size assertion (actual layout = 240 bytes)
-const _: () = assert!(core::mem::size_of::<PoolState>() == 240);
+// Compile-time size assertion (actual layout = 272 bytes after #61 item 4)
+const _: () = assert!(core::mem::size_of::<PoolState>() == 272);
 
 #[cfg(test)]
 mod tests {

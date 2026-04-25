@@ -13,5 +13,11 @@ pinocchio-token = "0.4"
 
 [features]
 no-entrypoint = []
+# #61 item 6: gates the SetBatchId instruction (disc 9). Compiles into
+# the program ONLY when this feature is set, so mainnet `cargo build-sbf`
+# (which doesn't pass the flag) cannot reach the handler. Used by
+# LiteSVM tests that need to fast-forward `pool.current_batch_id` past
+# the close-delay windows for CloseBatchHistory / CloseExpiredTicket.
+test-time-warp = []
 
 [dev-dependencies]

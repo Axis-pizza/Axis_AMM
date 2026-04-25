@@ -74,7 +74,19 @@ pub fn process_instruction(
 
     match discriminant {
         Instruction::InitializePool => {
-            // Layout: [base_fee_bps: u16 LE][fee_discount_bps: u16 LE][window_slots: u64 LE][initial_weight_a: u32 LE]
+            // Layout (v2 with treasury):
+            //   [base_fee_bps: u16 LE]
+            //   [fee_discount_bps: u16 LE]
+            //   [window_slots: u64 LE]
+            //   [initial_weight_a: u32 LE]
+            //   [treasury: [u8; 32]]                 (optional, see below)
+            //
+            // Backward compatibility (#61 item 4 migration): if the
+            // caller sends the v1 format (16 bytes, no treasury),
+            // treasury defaults to all zeros and ClearBatch falls back
+            // to `pool.authority` for bid recipient — preserving the
+            // pre-migration behaviour for older test fixtures and any
+            // existing devnet pools created before this commit.
             if data.len() < 16 {
                 return Err(ProgramError::InvalidInstructionData);
             }
@@ -84,6 +96,10 @@ pub fn process_instruction(
                 data[4], data[5], data[6], data[7], data[8], data[9], data[10], data[11],
             ]);
             let initial_weight_a = u32::from_le_bytes([data[12], data[13], data[14], data[15]]);
+            let mut treasury = [0u8; 32];
+            if data.len() >= 48 {
+                treasury.copy_from_slice(&data[16..48]);
+            }
 
             instructions::process_initialize_pool(
                 program_id,
@@ -92,6 +108,7 @@ pub fn process_instruction(
                 fee_discount_bps,
                 window_slots,
                 initial_weight_a,
+                treasury,
             )
         }
 

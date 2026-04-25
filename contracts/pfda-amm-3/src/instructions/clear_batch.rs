@@ -184,20 +184,36 @@ fn clear_batch_inner(
     };
 
     // --- Read oracle prices (if 3 oracle feeds provided: accounts 6, 7, 8) ---
-    let oracle_prices: Option<[u64; 3]> = if accounts.len() > 8 {
-        let mut prices = [0u64; 3];
+    //
+    // #61 item 2 (C-lite per-leg fallback): the original behaviour aborted
+    // the entire batch if ANY single feed went stale, which made the pool
+    // un-clearable during routine Switchboard outages. The new behaviour:
+    //
+    //   - For each feed i, capture Option<price>. Stale → None, no abort.
+    //   - When computing clearing price for leg i (i > 0):
+    //       both op[0] and op[i] fresh → apply ±5% oracle clamp
+    //       either stale → fall back to raw reserve-ratio for leg i
+    //   - All three stale AND feeds were supplied → still abort, since
+    //     there's no reference price at all and a sandwich window is
+    //     wider than we want without any oracle anchor.
+    //
+    // No-feeds path (accounts.len() <= 8) is unchanged: pure reserve-ratio.
+    let oracle_prices: [Option<u64>; 3] = if accounts.len() > 8 {
+        let mut prices = [None; 3];
+        let mut any_fresh = false;
         for i in 0..3 {
             let feed = &accounts[6 + i];
-            match crate::oracle::read_switchboard_price(feed, current_slot, 100, 1) {
-                Ok(p) => prices[i] = p,
-                Err(_) => {
-                    return Err(Pfda3Error::OracleStale.into());
-                }
+            if let Ok(p) = crate::oracle::read_switchboard_price(feed, current_slot, 100, 1) {
+                prices[i] = Some(p);
+                any_fresh = true;
             }
         }
-        Some(prices)
+        if !any_fresh {
+            return Err(Pfda3Error::OracleStale.into());
+        }
+        prices
     } else {
-        None
+        [None; 3]
     };
 
     // --- Compute clearing prices ---
@@ -229,21 +245,24 @@ fn clear_batch_inner(
             raw as u64
         };
 
-        let effective_price = if let Some(ref oracle_px) = oracle_prices {
-            if i == 0 {
-                reserve_price
-            } else {
-                let op_i = oracle_px[i] as u128;
-                let op_0 = oracle_px[0].max(1) as u128;
-                let oracle_rel = ((op_i << 32) / op_0) as u64;
-
-                let max_dev_bps: u64 = 500;
-                let lower = oracle_rel.saturating_sub(oracle_rel * max_dev_bps / 10_000);
-                let upper = oracle_rel.saturating_add(oracle_rel * max_dev_bps / 10_000);
-                reserve_price.max(lower).min(upper)
-            }
-        } else {
+        // #61 item 2: clamp ONLY when both op[0] and op[i] are fresh.
+        // Either stale → leg falls back to raw reserve_price.
+        let effective_price = if i == 0 {
             reserve_price
+        } else {
+            match (oracle_prices[0], oracle_prices[i]) {
+                (Some(op_0_v), Some(op_i_v)) => {
+                    let op_i = op_i_v as u128;
+                    let op_0 = op_0_v.max(1) as u128;
+                    let oracle_rel = ((op_i << 32) / op_0) as u64;
+
+                    let max_dev_bps: u64 = 500;
+                    let lower = oracle_rel.saturating_sub(oracle_rel * max_dev_bps / 10_000);
+                    let upper = oracle_rel.saturating_add(oracle_rel * max_dev_bps / 10_000);
+                    reserve_price.max(lower).min(upper)
+                }
+                _ => reserve_price,
+            }
         };
 
         clearing_prices[i] = effective_price;
@@ -454,7 +473,10 @@ fn clear_batch_inner(
     return_buf[32..40].copy_from_slice(&bid_lamports.to_le_bytes());
     return_buf[40..48].copy_from_slice(&batch_id.to_le_bytes());
     return_buf[48..56].copy_from_slice(&current_slot.to_le_bytes());
-    return_buf[56] = if oracle_prices.is_some() { 1 } else { 0 };
+    // #61 item 2: oracle_used is now the count of fresh feeds (0..=3)
+    // rather than a 0/1 flag, so off-chain analytics can tell partial
+    // fallback batches apart from full-oracle and full-fallback ones.
+    return_buf[56] = oracle_prices.iter().filter(|p| p.is_some()).count() as u8;
     pinocchio::program::set_return_data(&return_buf);
 
     Ok(())

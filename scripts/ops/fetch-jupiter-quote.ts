@@ -123,9 +123,10 @@ async function main() {
   console.log(`  ✓ ALTs   : ${(swap.addressLookupTableAddresses ?? []).length}`);
 
   // Write under <repo-root>/test/fixtures/jupiter regardless of which
-  // directory the script is invoked from. import.meta.dir points at
-  // scripts/ops/, so two `..` to repo root.
-  const repoRoot = path.resolve(import.meta.dir, "../..");
+  // directory the script is invoked from. __dirname points at
+  // scripts/ops/, so two `..` to repo root. Using __dirname instead of
+  // bun's import.meta.dir keeps the TS check (module: commonjs) green.
+  const repoRoot = path.resolve(__dirname, "../..");
   const fixtureDir = path.join(repoRoot, "test/fixtures/jupiter");
   fs.mkdirSync(fixtureDir, { recursive: true });
   const outPath = path.join(fixtureDir, `${label}.json`);

@@ -1,0 +1,232 @@
+{
+  "fetchedAt": "2026-04-25T17:15:15.008Z",
+  "inputMint": "So11111111111111111111111111111111111111112",
+  "outputMint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+  "amount": "100000000",
+  "slippageBps": 50,
+  "userPlaceholder": "11111111111111111111111111111112",
+  "note": "This response was recorded against mainnet-beta. To replay against a forked validator, clone every account in `swapInstruction.accounts` and every pubkey in `addressLookupTableAddresses` from mainnet-beta before running the test. The user account at the swap instruction's user position must be rewritten to the test wallet's pubkey at run time (the placeholder above is for stable hashing only).",
+  "quote": {
+    "inputMint": "So11111111111111111111111111111111111111112",
+    "inAmount": "100000000",
+    "outputMint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+    "outAmount": "8579743",
+    "otherAmountThreshold": "8536845",
+    "swapMode": "ExactIn",
+    "slippageBps": 50,
+    "platformFee": null,
+    "priceImpactPct": "0.0002903275606329999999999982",
+    "routePlan": [
+      {
+        "swapInfo": {
+          "ammKey": "FpCMFDFGYotvufJ7HrFHsWEiiQCGbkLCtwHiDnh7o28Q",
+          "label": "Whirlpool",
+          "inputMint": "So11111111111111111111111111111111111111112",
+          "outputMint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+          "inAmount": "100000000",
+          "outAmount": "8579743",
+          "updateContextSlot": "415608412"
+        },
+        "percent": 100,
+        "bps": null
+      }
+    ],
+    "contextSlot": 415608458,
+    "timeTaken": 0.00154236,
+    "swapUsdValue": "8.582234659253401025880852888",
+    "mostReliableAmmsQuoteReport": {
+      "info": {
+        "Czfq3xZZDmsdGdUyrNLtRhGc47cXcZtLG4crryfu44zE": "8577815",
+        "BZtgQEyS6eXUXicYPHecYQ7PybqodXQMvkjUbP4R8mUU": "8578488"
+      }
+    },
+    "longtailMarketQuoteReport": null,
+    "useIncurredSlippageForQuoting": null,
+    "useRewards": null,
+    "otherRoutePlans": null,
+    "loadedLongtailToken": false,
+    "instructionVersion": null
+  },
+  "swap": {
+    "tokenLedgerInstruction": null,
+    "computeBudgetInstructions": [
+      {
+        "programId": "ComputeBudget111111111111111111111111111111",
+        "accounts": [],
+        "data": "AsBcFQA="
+      }
+    ],
+    "setupInstructions": [],
+    "swapInstruction": {
+      "programId": "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4",
+      "accounts": [
+        {
+          "pubkey": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+          "isSigner": false,
+          "isWritable": false
+        },
+        {
+          "pubkey": "11111111111111111111111111111112",
+          "isSigner": true,
+          "isWritable": false
+        },
+        {
+          "pubkey": "5os4kc32895qa1smTDGsAVXRiisXRo4UJWauUePnas1u",
+          "isSigner": false,
+          "isWritable": true
+        },
+        {
+          "pubkey": "G9xKTRhM57AL4my3ZRVNqM95mxtACgKdNRPX6EVhB7hv",
+          "isSigner": false,
+          "isWritable": true
+        },
+        {
+          "pubkey": "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4",
+          "isSigner": false,
+          "isWritable": false
+        },
+        {
+          "pubkey": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+          "isSigner": false,
+          "isWritable": false
+        },
+        {
+          "pubkey": "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4",
+          "isSigner": false,
+          "isWritable": false
+        },
+        {
+          "pubkey": "D8cy77BBepLMngZx6ZukaTff5hCt1HrWyKk3Hnd9oitf",
+          "isSigner": false,
+          "isWritable": false
+        },
+        {
+          "pubkey": "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4",
+          "isSigner": false,
+          "isWritable": false
+        },
+        {
+          "pubkey": "whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc",
+          "isSigner": false,
+          "isWritable": false
+        },
+        {
+          "pubkey": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+          "isSigner": false,
+          "isWritable": false
+        },
+        {
+          "pubkey": "11111111111111111111111111111112",
+          "isSigner": false,
+          "isWritable": false
+        },
+        {
+          "pubkey": "FpCMFDFGYotvufJ7HrFHsWEiiQCGbkLCtwHiDnh7o28Q",
+          "isSigner": false,
+          "isWritable": true
+        },
+        {
+          "pubkey": "5os4kc32895qa1smTDGsAVXRiisXRo4UJWauUePnas1u",
+          "isSigner": false,
+          "isWritable": true
+        },
+        {
+          "pubkey": "6mQ8xEaHdTikyMvvMxUctYch6dUjnKgfoeib2msyMMi1",
+          "isSigner": false,
+          "isWritable": true
+        },
+        {
+          "pubkey": "G9xKTRhM57AL4my3ZRVNqM95mxtACgKdNRPX6EVhB7hv",
+          "isSigner": false,
+          "isWritable": true
+        },
+        {
+          "pubkey": "AQ36QRk3HAe6PHqBCtKTQnYKpt2kAagq9YoeTqUPMGHx",
+          "isSigner": false,
+          "isWritable": true
+        },
+        {
+          "pubkey": "G4ZvJ3P7u9BWgroiiW4Rq1XmqR6vVSzDW8x8V8FVtyau",
+          "isSigner": false,
+          "isWritable": true
+        },
+        {
+          "pubkey": "mDaa4haD4R2HBVwHwM8dv9oeYn7RxDX4orvAkSYbL1b",
+          "isSigner": false,
+          "isWritable": true
+        },
+        {
+          "pubkey": "2LftJnp6rXL6gBLv6hCr57jHvRX3jRBWPDmPwGjDTzgA",
+          "isSigner": false,
+          "isWritable": true
+        },
+        {
+          "pubkey": "923j69hYbT5Set5kYfiQr1D8jPL6z15tbfTbVLSwUWJD",
+          "isSigner": false,
+          "isWritable": false
+        }
+      ],
+      "data": "5RfLl3rjrSoBAAAAEQFkAAEA4fUFAAAAAJ/qggAAAAAAMgAA"
+    },
+    "cleanupInstruction": null,
+    "otherInstructions": [],
+    "addressLookupTableAddresses": [
+      "J7znuMyVHurxwjL19Rbtq2CSbjPEhqWvwEcgdWajEtnc"
+    ],
+    "prioritizationFeeLamports": 0,
+    "computeUnitLimit": 1400000,
+    "prioritizationType": {
+      "computeBudget": {
+        "microLamports": 0,
+        "estimatedMicroLamports": 0
+      }
+    },
+    "simulationSlot": null,
+    "dynamicSlippageReport": null,
+    "simulationError": null,
+    "addressesByLookupTableAddress": null,
+    "blockhashWithMetadata": {
+      "blockhash": [
+        233,
+        209,
+        56,
+        21,
+        138,
+        247,
+        173,
+        141,
+        3,
+        147,
+        46,
+        47,
+        97,
+        153,
+        153,
+        171,
+        200,
+        242,
+        184,
+        66,
+        90,
+        23,
+        87,
+        179,
+        74,
+        128,
+        96,
+        6,
+        179,
+        99,
+        192,
+        113
+      ],
+      "lastValidBlockHeight": 393702618,
+      "fetchedAt": {
+        "secs_since_epoch": 1777137301,
+        "nanos_since_epoch": 618401769
+      }
+    },
+    "timeTaken": 0.008125845,
+    "createAtaTimeTaken": 0.005058881
+  }
+}

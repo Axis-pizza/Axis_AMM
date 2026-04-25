@@ -4,6 +4,8 @@
   "private": true,
   "scripts": {
     "setup-feeds": "bun setup-switchboard-feeds.ts",
-    "axis-vault:demo": "bun axis-vault/demo.ts"
+    "axis-vault:demo": "bun axis-vault/demo.ts",
+    "ops:fetch-jupiter-quote": "bun ops/fetch-jupiter-quote.ts",
+    "ops:flip-treasury": "bun ops/flip-protocol-treasury.ts"
   }
 }

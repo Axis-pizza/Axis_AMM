@@ -16,6 +16,7 @@ fn panic(_info: &core::panic::PanicInfo) -> ! {
 pub mod constants;
 pub mod error;
 pub mod instructions;
+pub mod jupiter;
 pub mod state;
 
 use pinocchio::{
@@ -32,8 +33,13 @@ enum Instruction {
     Withdraw = 2,
     SweepTreasury = 3,
     /// SetPaused — authority-gated flip of the `paused` flag (#33).
-    /// Unblocks the paused-pool e2e scenarios kidney flagged.
     SetPaused = 4,
+    /// DepositSol — SOL-in variant with on-chain Jupiter CPI + strict
+    /// slippage gate. Scaffolding only — returns NotYetImplemented
+    /// until the follow-up design review (#36).
+    DepositSol = 5,
+    /// WithdrawSol — SOL-out variant, same status as DepositSol.
+    WithdrawSol = 6,
 }
 
 impl Instruction {
@@ -44,6 +50,8 @@ impl Instruction {
             2 => Some(Instruction::Withdraw),
             3 => Some(Instruction::SweepTreasury),
             4 => Some(Instruction::SetPaused),
+            5 => Some(Instruction::DepositSol),
+            6 => Some(Instruction::WithdrawSol),
             _ => None,
         }
     }
@@ -175,6 +183,58 @@ pub fn process_instruction(
                 return Err(ProgramError::InvalidInstructionData);
             }
             instructions::process_set_paused(program_id, accounts, data[0])
+        }
+
+        Instruction::DepositSol => {
+            // Data: [sol_in: u64][min_etf_out: u64][name_len: u8][name]
+            //       [leg_count: u8][per-leg payload: variable]
+            if data.len() < 18 {
+                return Err(ProgramError::InvalidInstructionData);
+            }
+            let sol_in = u64::from_le_bytes([
+                data[0], data[1], data[2], data[3],
+                data[4], data[5], data[6], data[7],
+            ]);
+            let min_etf_out = u64::from_le_bytes([
+                data[8], data[9], data[10], data[11],
+                data[12], data[13], data[14], data[15],
+            ]);
+            let name_len = data[16] as usize;
+            if data.len() < 17 + name_len + 1 {
+                return Err(ProgramError::InvalidInstructionData);
+            }
+            let name = &data[17..17 + name_len];
+            let leg_count = data[17 + name_len];
+            let leg_data = &data[17 + name_len + 1..];
+            instructions::process_deposit_sol(
+                program_id, accounts, sol_in, min_etf_out, name, leg_count, leg_data,
+            )
+        }
+
+        Instruction::WithdrawSol => {
+            // Data: [burn_amount: u64][min_sol_out: u64][name_len: u8][name]
+            //       [leg_count: u8][per-leg payload: variable]
+            if data.len() < 18 {
+                return Err(ProgramError::InvalidInstructionData);
+            }
+            let burn_amount = u64::from_le_bytes([
+                data[0], data[1], data[2], data[3],
+                data[4], data[5], data[6], data[7],
+            ]);
+            let min_sol_out = u64::from_le_bytes([
+                data[8], data[9], data[10], data[11],
+                data[12], data[13], data[14], data[15],
+            ]);
+            let name_len = data[16] as usize;
+            if data.len() < 17 + name_len + 1 {
+                return Err(ProgramError::InvalidInstructionData);
+            }
+            let name = &data[17..17 + name_len];
+            let leg_count = data[17 + name_len];
+            let leg_data = &data[17 + name_len + 1..];
+            instructions::process_withdraw_sol(
+                program_id, accounts, burn_amount, min_sol_out, name, leg_count, leg_data,
+            )
         }
     }
 }

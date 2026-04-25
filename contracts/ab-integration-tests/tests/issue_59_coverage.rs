@@ -41,6 +41,16 @@ const PFDA3_ERR_VAULT_MISMATCH: u32 = 8025;
 const PFDA3_ERR_UNAUTHORIZED: u32 = 8035;
 const G3M_ERR_UNAUTHORIZED: u32 = 7020;
 
+// Built-in Solana ProgramError::IllegalOwner — surfaces as either
+// `IllegalOwner` (literal variant) or numeric InstructionError(0, ...)
+// depending on how Pinocchio bubbles it. The check below tolerates both.
+fn assert_illegal_owner(err: &str, label: &str) {
+    assert!(
+        err.contains("IllegalOwner") || err.contains("Custom(4)") || err.contains("0x4"),
+        "{label}: expected IllegalOwner, got: {err}"
+    );
+}
+
 // ─── common tx helpers ──────────────────────────────────────────────────
 fn send(svm: &mut LiteSVM, ix: Instruction, payer: &Keypair) -> Result<u64, String> {
     let tx = Transaction::new_signed_with_payer(
@@ -682,6 +692,226 @@ fn g3m_set_paused_authority_toggles_flag() {
     )
     .expect("authority can clear pause");
     assert_eq!(svm.get_account(&pool).unwrap().data[paused_offset], 0);
+}
+
+// ─── pfda-amm ClearBatch unowned-pool substitution (B1 round 2) ────────
+//
+// PR #60 round 1 added `treasury == pool.authority`, but the pool data
+// was read before any owner check on pool_state_ai, so a fake account
+// (right discriminator + attacker pubkey in the authority field) made
+// both checks pass and the bid drained to the attacker. Round 2 hoists
+// `pool_state_ai.owner() == program_id` ahead of the bid block.
+
+#[test]
+fn pfda_clear_batch_rejects_unowned_pool_state() {
+    require_fixture!(PFDA_AMM_SO);
+    let PfdaFixture { mut svm, payer, pool: _real_pool } =
+        match seed_pfda_pool() { Some(f) => f, None => return };
+
+    // Forge a pool owned by the system program (not pfda-amm). Data
+    // carries the right discriminator + attacker's pubkey in the
+    // authority slot so the round-1 TreasuryMismatch check WOULD have
+    // passed if execution reached it. Round-2 owner check fires first.
+    let attacker = Keypair::new();
+    let mint_a = Address::new_unique();
+    let mint_b = Address::new_unique();
+    let vault_a = Address::new_unique();
+    let vault_b = Address::new_unique();
+    let fake_pool = Address::new_unique();
+    let pd = build_pfda_pool_state(
+        &mint_a, &mint_b, &vault_a, &vault_b,
+        1_000_000, 1_000_000, 500_000,
+        10, 0, 0, 30,
+        &attacker.pubkey(), 255,
+    );
+    svm.set_account(
+        fake_pool,
+        Account {
+            lamports: LAMPORTS_PER_SOL,
+            data: pd,
+            // Wrong owner — system program, not pfda-amm.
+            owner: system_program_id(),
+            executable: false,
+            rent_epoch: 0,
+        },
+    )
+    .unwrap();
+
+    let queue = seed_pfda_batch_queue(&mut svm, fake_pool, 0, 0);
+    let (hist, _) = Address::find_program_address(
+        &[b"history", fake_pool.as_ref(), &0u64.to_le_bytes()],
+        &pfda_amm_id(),
+    );
+    let (new_queue, _) = Address::find_program_address(
+        &[b"queue", fake_pool.as_ref(), &1u64.to_le_bytes()],
+        &pfda_amm_id(),
+    );
+
+    // attacker.pubkey() as the bid recipient — would have matched the
+    // forged pool.authority under round 1 logic. Owner check rejects.
+    svm.airdrop(&attacker.pubkey(), LAMPORTS_PER_SOL).unwrap();
+
+    let err = send(
+        &mut svm,
+        pfda_clear_batch_ix(
+            payer.pubkey(), fake_pool, queue, hist, new_queue,
+            2_000_000, Some(attacker.pubkey()),
+        ),
+        &payer,
+    )
+    .err()
+    .expect("forged pool_state_ai must be rejected");
+    assert_illegal_owner(&err, "clear_batch unowned pool");
+}
+
+// ─── pfda-amm-3 WithdrawFees coverage (B3) ─────────────────────────────
+//
+// PR #60 fixed SwapRequest's vault-key spoofing but left the same
+// vulnerability class in WithdrawFees, which uses invoke_signed with
+// the pool PDA as authority — so without an owner check + per-vault
+// key check, a fake pool (right discriminator + real mints + real
+// bump copied from a legit pool) plus an attacker-owned destination
+// could siphon any token account the pool PDA happens to authorise.
+// PR fix adds both checks; the two tests below pin them down.
+
+fn pfda3_withdraw_fees_ix(
+    authority: Address,
+    pool: Address,
+    vaults: &[Address; 3],
+    treasury_tokens: &[Address; 3],
+    amounts: [u64; 3],
+) -> Instruction {
+    let mut data = vec![5u8];
+    for a in &amounts {
+        data.extend_from_slice(&a.to_le_bytes());
+    }
+    Instruction {
+        program_id: pfda3_id(),
+        accounts: vec![
+            AccountMeta::new_readonly(authority, true),
+            AccountMeta::new(pool, false),
+            AccountMeta::new(vaults[0], false),
+            AccountMeta::new(vaults[1], false),
+            AccountMeta::new(vaults[2], false),
+            AccountMeta::new(treasury_tokens[0], false),
+            AccountMeta::new(treasury_tokens[1], false),
+            AccountMeta::new(treasury_tokens[2], false),
+            AccountMeta::new_readonly(token_program_id(), false),
+        ],
+        data,
+    }
+}
+
+#[test]
+fn pfda3_withdraw_fees_rejects_spoofed_vault_key() {
+    require_fixture!(PFDA_AMM_3_SO);
+    let Pfda3Fixture { mut svm, payer, pool, mints, vaults, user_tokens: _ } =
+        match seed_pfda3_pool() { Some(f) => f, None => return };
+
+    // Treasury ATAs (same mints, owned by attacker so a successful
+    // pre-fix exploit would land tokens in their account).
+    let treasury_tokens = [
+        Address::new_unique(),
+        Address::new_unique(),
+        Address::new_unique(),
+    ];
+    let attacker = Keypair::new();
+    for i in 0..3 {
+        create_token_account(&mut svm, treasury_tokens[i], &mints[i], &attacker.pubkey(), 0);
+    }
+
+    // Replace vaults[1] with a rogue token account: same mint, same
+    // pool-PDA authority (so invoke_signed would have happily signed
+    // a Transfer from it), but NOT in pool.vaults. Pre-fix this drained
+    // any pool-owned token account; post-fix VaultMismatch fires.
+    let rogue = Address::new_unique();
+    create_token_account(&mut svm, rogue, &mints[1], &pool, 500_000);
+    let bad_vaults = [vaults[0], rogue, vaults[2]];
+
+    let err = send(
+        &mut svm,
+        pfda3_withdraw_fees_ix(
+            payer.pubkey(),
+            pool,
+            &bad_vaults,
+            &treasury_tokens,
+            [0, 100_000, 0], // only the spoofed slot has a non-zero amount
+        ),
+        &payer,
+    )
+    .err()
+    .expect("withdraw_fees must reject spoofed vault key");
+    assert_custom_err(&err, PFDA3_ERR_VAULT_MISMATCH, "withdraw_fees spoofed vault");
+}
+
+#[test]
+fn pfda3_withdraw_fees_rejects_unowned_pool_state() {
+    require_fixture!(PFDA_AMM_3_SO);
+    let Pfda3Fixture { mut svm, payer: _, pool: _real_pool, mints: real_mints, vaults: real_vaults, user_tokens: _ } =
+        match seed_pfda3_pool() { Some(f) => f, None => return };
+
+    // Forge a fake pool owned by system program. Carry the real mints
+    // and real bump so seeds derive the legit pool PDA (the precondition
+    // for an invoke_signed exploit). Attacker is the "authority" so the
+    // OwnerMismatch check (later in the function) would NOT fire — only
+    // the round-2 owner check stands between attacker and a Transfer.
+    let attacker = Keypair::new();
+    let mut svm2 = svm; // local alias just for readability below
+    svm2.airdrop(&attacker.pubkey(), 100 * LAMPORTS_PER_SOL).unwrap();
+
+    let (_legit_pool, legit_bump) = Address::find_program_address(
+        &[b"pool3", real_mints[0].as_ref(), real_mints[1].as_ref(), real_mints[2].as_ref()],
+        &pfda3_id(),
+    );
+    let treasury_placeholder = Address::new_unique();
+    let pd = build_pfda3_pool_state(
+        &real_mints,
+        &real_vaults,
+        &[1_000_000; 3],
+        &[333_333, 333_333, 333_334],
+        10, 0, 100,
+        &treasury_placeholder,
+        &attacker.pubkey(),
+        30,
+        legit_bump,
+    );
+    let fake_pool = Address::new_unique();
+    svm2.set_account(
+        fake_pool,
+        Account {
+            lamports: LAMPORTS_PER_SOL,
+            data: pd,
+            owner: system_program_id(),
+            executable: false,
+            rent_epoch: 0,
+        },
+    )
+    .unwrap();
+
+    let treasury_tokens = [
+        Address::new_unique(),
+        Address::new_unique(),
+        Address::new_unique(),
+    ];
+    for i in 0..3 {
+        create_token_account(&mut svm2, treasury_tokens[i], &real_mints[i], &attacker.pubkey(), 0);
+    }
+
+    let err = send_signed_by(
+        &mut svm2,
+        pfda3_withdraw_fees_ix(
+            attacker.pubkey(),
+            fake_pool,
+            &real_vaults,
+            &treasury_tokens,
+            [100_000, 0, 0],
+        ),
+        &attacker,
+        &attacker,
+    )
+    .err()
+    .expect("forged pool_state must be rejected by owner check");
+    assert_illegal_owner(&err, "withdraw_fees unowned pool");
 }
 
 #[test]

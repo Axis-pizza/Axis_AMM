@@ -35,7 +35,7 @@ use crate::state::{load_mut, PoolState3};
 /// instruction, with an `InsufficientBalance` guard up-front so the
 /// authority can't accidentally under-flow the accounting.
 pub fn process_withdraw_fees(
-    _program_id: &Pubkey,
+    program_id: &Pubkey,
     accounts: &[AccountInfo],
     amounts: [u64; 3],
 ) -> ProgramResult {
@@ -46,11 +46,24 @@ pub fn process_withdraw_fees(
         return Err(ProgramError::MissingRequiredSignature);
     }
 
+    // #59 round 2: pool_ai is used to derive the PDA-signed Transfer
+    // authority below. Without an owner check + per-vault key check,
+    // an attacker holding a fake pool (right discriminator, attacker
+    // pubkey in `authority`, real mints + real bump copied from the
+    // legit pool) plus an attacker-owned `treasury_token` could
+    // siphon every legit vault — the seeds derive the legit pool PDA
+    // so invoke_signed authorises Transfer on real vaults regardless
+    // of what's in pool_ai. Hoist the owner check first, then assert
+    // each vault key equals pool.vaults[i] inside the loop.
+    if pool_ai.owner() != program_id {
+        return Err(ProgramError::IllegalOwner);
+    }
+
     // Validate authority + capture the values we need for CPIs. We
     // also pre-check that every requested withdrawal fits inside the
     // tracked reserves so we don't start transferring before we know
     // the whole batch can succeed.
-    let (mints, bump) = {
+    let (mints, vaults, bump) = {
         let data = pool_ai.try_borrow_data()?;
         let pool = unsafe { crate::state::load::<PoolState3>(&data) }
             .ok_or(ProgramError::InvalidAccountData)?;
@@ -65,7 +78,7 @@ pub fn process_withdraw_fees(
                 return Err(Pfda3Error::FeeWithdrawExceedsReserves.into());
             }
         }
-        (pool.token_mints, pool.bump)
+        (pool.token_mints, pool.vaults, pool.bump)
     };
 
     let bump_bytes = [bump];
@@ -81,6 +94,15 @@ pub fn process_withdraw_fees(
         if amounts[i] > 0 {
             let vault = &accounts[2 + i];
             let treasury_token = &accounts[5 + i];
+
+            // #59 round 2: assert vault matches pool.vaults[i] before
+            // signing a Transfer. The pool PDA is the token-account
+            // authority, so without this check it could sign on any
+            // token account it happens to own (not just the
+            // registered vaults).
+            if vault.key().as_ref() != &vaults[i] {
+                return Err(Pfda3Error::VaultMismatch.into());
+            }
 
             Transfer {
                 from: vault,

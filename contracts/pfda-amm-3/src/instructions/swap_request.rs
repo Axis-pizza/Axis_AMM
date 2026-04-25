@@ -47,6 +47,18 @@ pub fn process_swap_request_3(
         return Err(ProgramError::MissingRequiredSignature);
     }
 
+    // #59 round 2: the vault-key check below assumes pool_ai is a
+    // real pool owned by this program. Without an explicit owner
+    // check, an attacker (or malicious frontend) could supply a
+    // forged pool_ai whose data carries the right discriminator
+    // and an attacker-controlled value in pool.vaults[in_token_idx],
+    // pass a matching `vault` AccountInfo, and the equality check
+    // would pass while user tokens flowed to the attacker's vault.
+    // Same pattern as close_batch_history.rs and set_paused.rs.
+    if pool_ai.owner() != program_id {
+        return Err(ProgramError::IllegalOwner);
+    }
+
     // Load pool
     let (pool_key, current_batch_id, current_window_end) = {
         let data = pool_ai.try_borrow_data()?;

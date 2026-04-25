@@ -41,13 +41,60 @@ pub fn process_clear_batch(program_id: &Pubkey, accounts: &[AccountInfo], bid_la
         return Err(ProgramError::NotEnoughAccountKeys);
     };
 
+    // #59 round 2: the bid block previously ran before any signer or
+    // pool ownership check. Two consequences:
+    //   (a) cranker.is_signer() fired AFTER the Transfer CPI — the
+    //       runtime would still reject the system Transfer for a
+    //       non-signing `from`, but defense-in-depth ordering was
+    //       wrong and any future refactor of the CPI shape would
+    //       have created a real gap.
+    //   (b) pool_state_ai.owner() and the PDA recompute happened
+    //       AFTER pool.authority was read, so a crafted account
+    //       carrying the right discriminator + an attacker-chosen
+    //       authority field would pass the TreasuryMismatch check
+    //       and drain the bid to whichever pubkey the attacker put
+    //       in `accounts[8]`.
+    // Both gaps are closed by hoisting signer + owner + PDA validation
+    // ahead of any pool data read. pool.authority is captured as part
+    // of that load and reused below.
+    if !cranker.is_signer() {
+        return Err(ProgramError::MissingRequiredSignature);
+    }
+    if pool_state_ai.owner() != program_id {
+        return Err(ProgramError::IllegalOwner);
+    }
+
     // Optional oracle feed accounts
     let oracle_feed_a = if accounts.len() > 6 { Some(&accounts[6]) } else { None };
     let oracle_feed_b = if accounts.len() > 7 { Some(&accounts[7]) } else { None };
 
-    // #59 / Jito bid enforcement:
+    // Single canonical pool load: validates discriminator, reentrancy,
+    // paused, PDA seeds, and captures pool.authority for the bid block.
+    let pool_authority = {
+        let data = pool_state_ai.try_borrow_data()?;
+        let pool = unsafe { load::<PoolState>(&data) }.ok_or(ProgramError::InvalidAccountData)?;
+        if !pool.is_initialized() {
+            return Err(PfmmError::InvalidDiscriminator.into());
+        }
+        if pool.reentrancy_guard != 0 {
+            return Err(PfmmError::ReentrancyDetected.into());
+        }
+        if pool.paused != 0 {
+            return Err(PfmmError::PoolPaused.into());
+        }
+        let (expected, _bump) = pubkey::find_program_address(
+            &[b"pool", &pool.token_a_mint, &pool.token_b_mint],
+            program_id,
+        );
+        if pool_state_ai.key() != &expected {
+            return Err(ProgramError::InvalidSeeds);
+        }
+        pool.authority
+    };
+
+    // #59 / Jito bid enforcement (post-validation):
     // If bid_lamports > 0, account 8 must be present AND must equal
-    // `pool.authority`. Pre-fix, the code happily Transfer'd lamports to
+    // pool.authority. Pre-fix, the code happily Transfer'd lamports to
     // whatever account sat at slot 8, which let a malicious cranker
     // redirect bid payments to themselves.
     //
@@ -62,15 +109,6 @@ pub fn process_clear_batch(program_id: &Pubkey, accounts: &[AccountInfo], bid_la
             return Err(PfmmError::BidWithoutTreasury.into());
         }
         let treasury = &accounts[8];
-        let pool_authority = {
-            let data = pool_state_ai.try_borrow_data()?;
-            let pool = unsafe { load::<PoolState>(&data) }
-                .ok_or(ProgramError::InvalidAccountData)?;
-            if !pool.is_initialized() {
-                return Err(PfmmError::InvalidDiscriminator.into());
-            }
-            pool.authority
-        };
         if treasury.key().as_ref() != &pool_authority {
             return Err(PfmmError::TreasuryMismatch.into());
         }
@@ -90,33 +128,7 @@ pub fn process_clear_batch(program_id: &Pubkey, accounts: &[AccountInfo], bid_la
         );
     }
 
-    if !cranker.is_signer() {
-        return Err(ProgramError::MissingRequiredSignature);
-    }
-
     let current_slot = Clock::get()?.slot;
-
-    // Verify pool_state PDA
-    {
-        let data = pool_state_ai.try_borrow_data()?;
-        let pool = unsafe { load::<PoolState>(&data) }.ok_or(ProgramError::InvalidAccountData)?;
-        if !pool.is_initialized() {
-            return Err(PfmmError::InvalidDiscriminator.into());
-        }
-        if pool.reentrancy_guard != 0 {
-            return Err(PfmmError::ReentrancyDetected.into());
-        }
-        if pool.paused != 0 {
-            return Err(PfmmError::PoolPaused.into());
-        }
-        let (expected, _bump) = pubkey::find_program_address(
-            &[b"pool", &pool.token_a_mint, &pool.token_b_mint],
-            program_id,
-        );
-        if pool_state_ai.key() != &expected {
-            return Err(ProgramError::InvalidSeeds);
-        }
-    }
 
     // Step 1: Validate batch window has ended and read pool data
     let (

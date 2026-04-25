@@ -49,6 +49,15 @@ pub enum PfmmError {
     BidTooLow = 6021,
     /// next_window_end would overflow u64
     WindowEndOverflow = 6022,
+    /// ClearBatch bid recipient does not match `pool.authority` (#59).
+    /// pfda-amm doesn't carry a separate `treasury` field today, so the
+    /// pool authority is the canonical bid recipient until a dedicated
+    /// treasury schema is added in a follow-up.
+    TreasuryMismatch = 6023,
+    /// ClearBatch received a non-zero bid but no treasury/authority
+    /// account was supplied to receive it (#59). Without the account,
+    /// the Transfer CPI target is undefined — reject before any work.
+    BidWithoutTreasury = 6024,
 }
 
 impl From<PfmmError> for ProgramError {

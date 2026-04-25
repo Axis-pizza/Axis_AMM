@@ -23,14 +23,17 @@ use crate::{
 /// 5. `[]`                  system_program
 /// 6. `[]` (optional)       oracle_feed_a — Switchboard price feed for token A
 /// 7. `[]` (optional)       oracle_feed_b — Switchboard price feed for token B
-/// 8. `[]` (optional)       instructions_sysvar — for Jito tip verification
+/// 8. `[writable]` (req when bid>0) bid_recipient — must equal `pool.authority`
 ///
 /// Integration points:
 ///   - Switchboard: If oracle feeds are provided (accounts 6+7), clearing price
 ///     is bounded within ±5% of oracle-derived market price.
-///   - Jito: If instructions sysvar is provided (account 8), verifies that a
-///     tip was included in the same transaction to a Jito tip account.
-///     The tip is split: protocol_share + lp_share per the revenue formula.
+///   - Jito: If `bid_lamports > 0`, account 8 receives the searcher's bid
+///     and MUST equal `pool.authority`. pfda-amm does not yet carry a
+///     dedicated `treasury` field (unlike pfda-amm-3); until that schema
+///     lands, the pool authority is the canonical recipient. #59 called
+///     out that the pre-fix code accepted ANY account here, letting the
+///     cranker redirect bid payments freely.
 pub fn process_clear_batch(program_id: &Pubkey, accounts: &[AccountInfo], bid_lamports: u64) -> ProgramResult {
     let [cranker, pool_state_ai, batch_queue_ai, history_ai, new_queue_ai, _system_program, ..] =
         accounts
@@ -38,49 +41,36 @@ pub fn process_clear_batch(program_id: &Pubkey, accounts: &[AccountInfo], bid_la
         return Err(ProgramError::NotEnoughAccountKeys);
     };
 
+    // #59 round 2: the bid block previously ran before any signer or
+    // pool ownership check. Two consequences:
+    //   (a) cranker.is_signer() fired AFTER the Transfer CPI — the
+    //       runtime would still reject the system Transfer for a
+    //       non-signing `from`, but defense-in-depth ordering was
+    //       wrong and any future refactor of the CPI shape would
+    //       have created a real gap.
+    //   (b) pool_state_ai.owner() and the PDA recompute happened
+    //       AFTER pool.authority was read, so a crafted account
+    //       carrying the right discriminator + an attacker-chosen
+    //       authority field would pass the TreasuryMismatch check
+    //       and drain the bid to whichever pubkey the attacker put
+    //       in `accounts[8]`.
+    // Both gaps are closed by hoisting signer + owner + PDA validation
+    // ahead of any pool data read. pool.authority is captured as part
+    // of that load and reused below.
+    if !cranker.is_signer() {
+        return Err(ProgramError::MissingRequiredSignature);
+    }
+    if pool_state_ai.owner() != program_id {
+        return Err(ProgramError::IllegalOwner);
+    }
+
     // Optional oracle feed accounts
     let oracle_feed_a = if accounts.len() > 6 { Some(&accounts[6]) } else { None };
     let oracle_feed_b = if accounts.len() > 7 { Some(&accounts[7]) } else { None };
 
-    // Jito auction bid enforcement:
-    // If bid_lamports > 0 and accounts[8] is a protocol treasury,
-    // transfer SOL from cranker to treasury. This is the searcher's payment
-    // for exclusive clearing rights in this batch window.
-    //
-    // #33: MIN_BID_LAMPORTS was never enforced on pfda-amm — pfda-amm-3's
-    // ClearBatch already has the check; mirror it here so anti-spam
-    // parity holds across both programs.
-    if bid_lamports > 0 {
-        if bid_lamports < crate::jito::MIN_BID_LAMPORTS {
-            return Err(PfmmError::BidTooLow.into());
-        }
-        if accounts.len() > 8 {
-            let treasury = &accounts[8];
-
-            // Transfer SOL from cranker to treasury via system program CPI
-            pinocchio_system::instructions::Transfer {
-                from: cranker,
-                to: treasury,
-                lamports: bid_lamports,
-            }
-            .invoke()?;
-
-            // Compute revenue split for accounting
-            let (_protocol_share, _lp_share) = crate::jito::compute_bid_split(
-                bid_lamports,
-                crate::jito::DEFAULT_ALPHA_BPS,
-            );
-        }
-    }
-
-    if !cranker.is_signer() {
-        return Err(ProgramError::MissingRequiredSignature);
-    }
-
-    let current_slot = Clock::get()?.slot;
-
-    // Verify pool_state PDA
-    {
+    // Single canonical pool load: validates discriminator, reentrancy,
+    // paused, PDA seeds, and captures pool.authority for the bid block.
+    let pool_authority = {
         let data = pool_state_ai.try_borrow_data()?;
         let pool = unsafe { load::<PoolState>(&data) }.ok_or(ProgramError::InvalidAccountData)?;
         if !pool.is_initialized() {
@@ -99,7 +89,46 @@ pub fn process_clear_batch(program_id: &Pubkey, accounts: &[AccountInfo], bid_la
         if pool_state_ai.key() != &expected {
             return Err(ProgramError::InvalidSeeds);
         }
+        pool.authority
+    };
+
+    // #59 / Jito bid enforcement (post-validation):
+    // If bid_lamports > 0, account 8 must be present AND must equal
+    // pool.authority. Pre-fix, the code happily Transfer'd lamports to
+    // whatever account sat at slot 8, which let a malicious cranker
+    // redirect bid payments to themselves.
+    //
+    // #33: MIN_BID_LAMPORTS was never enforced on pfda-amm — pfda-amm-3's
+    // ClearBatch already has the check; mirror it here so anti-spam
+    // parity holds across both programs.
+    if bid_lamports > 0 {
+        if bid_lamports < crate::jito::MIN_BID_LAMPORTS {
+            return Err(PfmmError::BidTooLow.into());
+        }
+        if accounts.len() <= 8 {
+            return Err(PfmmError::BidWithoutTreasury.into());
+        }
+        let treasury = &accounts[8];
+        if treasury.key().as_ref() != &pool_authority {
+            return Err(PfmmError::TreasuryMismatch.into());
+        }
+
+        // Transfer SOL from cranker to treasury via system program CPI
+        pinocchio_system::instructions::Transfer {
+            from: cranker,
+            to: treasury,
+            lamports: bid_lamports,
+        }
+        .invoke()?;
+
+        // Compute revenue split for accounting
+        let (_protocol_share, _lp_share) = crate::jito::compute_bid_split(
+            bid_lamports,
+            crate::jito::DEFAULT_ALPHA_BPS,
+        );
     }
+
+    let current_slot = Clock::get()?.slot;
 
     // Step 1: Validate batch window has ended and read pool data
     let (

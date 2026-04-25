@@ -59,13 +59,38 @@ jobs:
           cd contracts/axis-g3m && cargo build-sbf
           cd ../pfda-amm-3 && cargo build-sbf
 
-      - name: Dump Jupiter V6 from mainnet
+      - name: Dump Jupiter V6 from mainnet (with RPC fallbacks)
+        # The public mainnet-beta endpoint hits transient connection
+        # failures often enough to break this workflow on most pushes.
+        # Try mainnet-beta first; on failure rotate through alternative
+        # public RPCs that mirror Solana mainnet state. Up to 3 attempts
+        # per URL.
         run: |
           mkdir -p contracts/axis-g3m/fixtures
-          solana program dump \
-            -u https://api.mainnet-beta.solana.com \
-            JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4 \
-            contracts/axis-g3m/fixtures/jupiter_v6.so
+          urls=(
+            "https://api.mainnet-beta.solana.com"
+            "https://solana-api.projectserum.com"
+            "https://rpc.ankr.com/solana"
+          )
+          ok=0
+          for url in "${urls[@]}"; do
+            for attempt in 1 2 3; do
+              echo "Attempt $attempt against $url"
+              if solana program dump \
+                  -u "$url" \
+                  JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4 \
+                  contracts/axis-g3m/fixtures/jupiter_v6.so; then
+                ok=1
+                break 2
+              fi
+              sleep $((attempt * 5))
+            done
+          done
+          if [ "$ok" -ne 1 ]; then
+            echo "::error::failed to dump Jupiter V6 from any RPC"
+            exit 1
+          fi
+          ls -la contracts/axis-g3m/fixtures/jupiter_v6.so
 
       - name: Generate A/B report via LiteSVM
         run: |
@@ -84,15 +109,18 @@ jobs:
           solana-keygen new --force --no-bip39-passphrase --silent -o ~/.config/solana/id.json
 
       - name: Start validator with mainnet-forked Jupiter
+        # Use the locally dumped Jupiter binary (from the previous step)
+        # instead of `--clone --url mainnet-beta`, so validator startup
+        # doesn't hit the network and can't fail on RPC outages.
+        # Token program is bundled into solana-test-validator by default;
+        # no clone needed.
         run: |
           solana-test-validator \
             --reset \
             --ledger /tmp/fork-ledger \
             --bpf-program 65aE9QdVz5bapV19BGt5cyTgVitYpekGwusRoQEovNUi contracts/axis-g3m/target/deploy/axis_g3m.so \
             --bpf-program DbAPmgkrpCCZrpBMv5x1ye6nJUreqY313SuQjZsMyjEf contracts/pfda-amm-3/target/deploy/pfda_amm_3.so \
-            --clone JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4 \
-            --clone TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA \
-            --url https://api.mainnet-beta.solana.com \
+            --bpf-program JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4 contracts/axis-g3m/fixtures/jupiter_v6.so \
             > /tmp/fork-validator.log 2>&1 &
           echo $! > /tmp/fork-validator.pid
           for i in $(seq 1 30); do

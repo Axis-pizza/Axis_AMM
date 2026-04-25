@@ -39,6 +39,12 @@ enum Instruction {
     SetPaused = 6,
     CloseBatchHistory = 7,
     CloseExpiredTicket = 8,
+    /// #61 item 6: TEST-ONLY ix for fast-forwarding pool.current_batch_id
+    /// past the close-delay windows. Compiled in only when the
+    /// `test-time-warp` feature is set; mainnet `cargo build-sbf` (which
+    /// does not pass the flag) cannot reach the handler.
+    #[cfg(feature = "test-time-warp")]
+    SetBatchId = 9,
 }
 
 impl Instruction {
@@ -53,6 +59,8 @@ impl Instruction {
             6 => Some(Instruction::SetPaused),
             7 => Some(Instruction::CloseBatchHistory),
             8 => Some(Instruction::CloseExpiredTicket),
+            #[cfg(feature = "test-time-warp")]
+            9 => Some(Instruction::SetBatchId),
             _ => None,
         }
     }
@@ -160,6 +168,19 @@ pub fn process_instruction(
 
         Instruction::CloseExpiredTicket => {
             instructions::process_close_expired_ticket_3(program_id, accounts)
+        }
+
+        #[cfg(feature = "test-time-warp")]
+        Instruction::SetBatchId => {
+            // Data: [new_batch_id: u64 LE]
+            if data.len() < 8 {
+                return Err(ProgramError::InvalidInstructionData);
+            }
+            let new_batch_id = u64::from_le_bytes([
+                data[0], data[1], data[2], data[3],
+                data[4], data[5], data[6], data[7],
+            ]);
+            instructions::process_set_batch_id(program_id, accounts, new_batch_id)
         }
     }
 }

@@ -8,6 +8,9 @@ pub mod set_paused;
 pub mod swap_request;
 pub mod withdraw_fees;
 
+#[cfg(feature = "test-time-warp")]
+pub mod set_batch_id;
+
 pub use add_liquidity::process_add_liquidity_3;
 pub use claim::process_claim_3;
 pub use clear_batch::process_clear_batch_3;
@@ -17,3 +20,6 @@ pub use initialize_pool::process_initialize_pool_3;
 pub use set_paused::process_set_paused_3;
 pub use swap_request::process_swap_request_3;
 pub use withdraw_fees::process_withdraw_fees;
+
+#[cfg(feature = "test-time-warp")]
+pub use set_batch_id::process_set_batch_id;

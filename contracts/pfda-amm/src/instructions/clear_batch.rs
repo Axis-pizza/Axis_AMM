@@ -23,17 +23,19 @@ use crate::{
 /// 5. `[]`                  system_program
 /// 6. `[]` (optional)       oracle_feed_a — Switchboard price feed for token A
 /// 7. `[]` (optional)       oracle_feed_b — Switchboard price feed for token B
-/// 8. `[writable]` (req when bid>0) bid_recipient — must equal `pool.authority`
+/// 8. `[writable]` (req when bid>0) bid_recipient — must equal `pool.treasury`
+///                                  if non-zero, else `pool.authority` (legacy)
 ///
 /// Integration points:
 ///   - Switchboard: If oracle feeds are provided (accounts 6+7), clearing price
 ///     is bounded within ±5% of oracle-derived market price.
 ///   - Jito: If `bid_lamports > 0`, account 8 receives the searcher's bid
-///     and MUST equal `pool.authority`. pfda-amm does not yet carry a
-///     dedicated `treasury` field (unlike pfda-amm-3); until that schema
-///     lands, the pool authority is the canonical recipient. #59 called
-///     out that the pre-fix code accepted ANY account here, letting the
-///     cranker redirect bid payments freely.
+///     and MUST equal `pool.treasury` (the dedicated bid-recipient field
+///     added in #61 item 4). For backward compatibility with devnet
+///     pools created before the migration — and any future test fixture
+///     that omits the v2 treasury bytes — a zero treasury falls back to
+///     `pool.authority`. Once PROTOCOL_TREASURY is provisioned (#38) the
+///     fallback path becomes a deploy-time concern only.
 pub fn process_clear_batch(program_id: &Pubkey, accounts: &[AccountInfo], bid_lamports: u64) -> ProgramResult {
     let [cranker, pool_state_ai, batch_queue_ai, history_ai, new_queue_ai, _system_program, ..] =
         accounts
@@ -69,8 +71,10 @@ pub fn process_clear_batch(program_id: &Pubkey, accounts: &[AccountInfo], bid_la
     let oracle_feed_b = if accounts.len() > 7 { Some(&accounts[7]) } else { None };
 
     // Single canonical pool load: validates discriminator, reentrancy,
-    // paused, PDA seeds, and captures pool.authority for the bid block.
-    let pool_authority = {
+    // paused, PDA seeds, and captures the bid recipient for the bid
+    // block. Recipient is `pool.treasury` if non-zero (post-migration
+    // pools), else `pool.authority` (legacy fallback per #61 item 4).
+    let bid_recipient = {
         let data = pool_state_ai.try_borrow_data()?;
         let pool = unsafe { load::<PoolState>(&data) }.ok_or(ProgramError::InvalidAccountData)?;
         if !pool.is_initialized() {
@@ -89,14 +93,18 @@ pub fn process_clear_batch(program_id: &Pubkey, accounts: &[AccountInfo], bid_la
         if pool_state_ai.key() != &expected {
             return Err(ProgramError::InvalidSeeds);
         }
-        pool.authority
+        if pool.treasury != [0u8; 32] {
+            pool.treasury
+        } else {
+            pool.authority
+        }
     };
 
     // #59 / Jito bid enforcement (post-validation):
     // If bid_lamports > 0, account 8 must be present AND must equal
-    // pool.authority. Pre-fix, the code happily Transfer'd lamports to
-    // whatever account sat at slot 8, which let a malicious cranker
-    // redirect bid payments to themselves.
+    // the resolved bid_recipient (treasury or legacy authority). Pre-fix,
+    // the code happily Transfer'd lamports to whatever account sat at
+    // slot 8, which let a malicious cranker redirect bid payments.
     //
     // #33: MIN_BID_LAMPORTS was never enforced on pfda-amm — pfda-amm-3's
     // ClearBatch already has the check; mirror it here so anti-spam
@@ -109,7 +117,7 @@ pub fn process_clear_batch(program_id: &Pubkey, accounts: &[AccountInfo], bid_la
             return Err(PfmmError::BidWithoutTreasury.into());
         }
         let treasury = &accounts[8];
-        if treasury.key().as_ref() != &pool_authority {
+        if treasury.key().as_ref() != &bid_recipient {
             return Err(PfmmError::TreasuryMismatch.into());
         }
 

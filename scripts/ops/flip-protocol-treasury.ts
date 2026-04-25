@@ -21,7 +21,10 @@
 import * as fs from "fs";
 import * as path from "path";
 
-const repoRoot = path.resolve(import.meta.dir, "../..");
+// __dirname (provided by bun/CJS) instead of import.meta.dir keeps the
+// project's TS check (module: commonjs) happy without adding bun-specific
+// type declarations.
+const repoRoot = path.resolve(__dirname, "../..");
 const CONSTANTS_PATH = path.join(
   repoRoot,
   "contracts/axis-vault/src/constants.rs",

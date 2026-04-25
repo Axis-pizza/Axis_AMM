@@ -39,6 +39,10 @@ path = "tests/axis_vault_coverage.rs"
 name = "axis_vault_sol_ix_scaffold"
 path = "tests/axis_vault_sol_ix_scaffold.rs"
 
+[[test]]
+name = "issue_59_coverage"
+path = "tests/issue_59_coverage.rs"
+
 [dependencies]
 litesvm = "0.11"
 solana-keypair = "3.1"

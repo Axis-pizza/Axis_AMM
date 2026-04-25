@@ -47,6 +47,18 @@ pub fn process_swap_request_3(
         return Err(ProgramError::MissingRequiredSignature);
     }
 
+    // #59 round 2: the vault-key check below assumes pool_ai is a
+    // real pool owned by this program. Without an explicit owner
+    // check, an attacker (or malicious frontend) could supply a
+    // forged pool_ai whose data carries the right discriminator
+    // and an attacker-controlled value in pool.vaults[in_token_idx],
+    // pass a matching `vault` AccountInfo, and the equality check
+    // would pass while user tokens flowed to the attacker's vault.
+    // Same pattern as close_batch_history.rs and set_paused.rs.
+    if pool_ai.owner() != program_id {
+        return Err(ProgramError::IllegalOwner);
+    }
+
     // Load pool
     let (pool_key, current_batch_id, current_window_end) = {
         let data = pool_ai.try_borrow_data()?;
@@ -63,6 +75,16 @@ pub fn process_swap_request_3(
             // discriminator error confused operators in logs. Return
             // the dedicated PoolPaused code instead.
             return Err(Pfda3Error::PoolPaused.into());
+        }
+        // #59: previously this only checked the vault mint via
+        // verify_token_account_mint, which left SwapRequest open to
+        // vault-key spoofing — a crafted token account of the right
+        // mint could be passed in as the destination and user tokens
+        // would land there while the batch queue still incremented.
+        // Assert the key equals the pool's stored vault for this token
+        // index before any Transfer runs.
+        if vault.key().as_ref() != &pool.vaults[in_token_idx as usize] {
+            return Err(Pfda3Error::VaultMismatch.into());
         }
         // Security rule 7: verify vault mint matches pool token
         crate::security::verify_token_account_mint(vault, &pool.token_mints[in_token_idx as usize])?;

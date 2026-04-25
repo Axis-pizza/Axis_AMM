@@ -71,33 +71,14 @@ jobs:
           cd ../pfda-amm && cargo build-sbf
           cd ../axis-vault && cargo build-sbf
 
-      - name: Dump Jupiter V6 from mainnet (with RPC fallbacks)
-        # Mainnet-beta has flaky availability under CI load. Try it first;
-        # rotate through public mirrors on failure. Up to 3 attempts per
-        # URL with 5s/10s/15s backoff.
+      - name: Verify committed Jupiter V6 fixture
+        # Same rationale as in main-report.yml: the binary is committed
+        # so CI never round-trips to mainnet RPC. Refresh via
+        # scripts/ops/refresh-jupiter-fixture.sh on Jupiter V6 upgrades.
         run: |
-          mkdir -p contracts/axis-g3m/fixtures
-          urls=(
-            "https://api.mainnet-beta.solana.com"
-            "https://solana-api.projectserum.com"
-            "https://rpc.ankr.com/solana"
-          )
-          ok=0
-          for url in "${urls[@]}"; do
-            for attempt in 1 2 3; do
-              echo "Attempt $attempt against $url"
-              if solana program dump \
-                  -u "$url" \
-                  JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4 \
-                  contracts/axis-g3m/fixtures/jupiter_v6.so; then
-                ok=1
-                break 2
-              fi
-              sleep $((attempt * 5))
-            done
-          done
-          if [ "$ok" -ne 1 ]; then
-            echo "::error::failed to dump Jupiter V6 from any RPC"
+          if [ ! -f contracts/axis-g3m/fixtures/jupiter_v6.so ]; then
+            echo "::error::contracts/axis-g3m/fixtures/jupiter_v6.so missing"
+            echo "Run scripts/ops/refresh-jupiter-fixture.sh and commit the result."
             exit 1
           fi
           ls -la contracts/axis-g3m/fixtures/jupiter_v6.so

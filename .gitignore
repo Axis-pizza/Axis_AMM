@@ -9,6 +9,12 @@ Cargo.lock          # uncomment to track lockfile for applications
 # ──────────────────────────────────────────────
 # Compiled program binaries
 *.so
+# Exception: the Jupiter V6 program binary lives under contracts/axis-g3m/fixtures
+# and is committed so CI workflows can launch a forked validator without
+# round-tripping through mainnet RPC (mainnet-beta + the public mirrors
+# proved too flaky for a hard CI dependency). Refresh via
+# scripts/ops/refresh-jupiter-fixture.sh on Jupiter V6 upgrades.
+!contracts/axis-g3m/fixtures/jupiter_v6.so
 deploy/
 
 # Test validator ledger data (can be gigabytes)
@@ -57,5 +63,4 @@ __pycache__/
 *.swp
 *.swo
 Thumbs.db
-contracts/axis-g3m/fixtures/jupiter_v6.so
 reports/ab/pr-validation/history/

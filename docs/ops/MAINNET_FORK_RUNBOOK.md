@@ -86,11 +86,13 @@ ALTs that Jupiter's response references.
 cargo build-sbf --manifest-path contracts/axis-g3m/Cargo.toml
 cargo build-sbf --manifest-path contracts/pfda-amm-3/Cargo.toml
 
-# 2. Make sure Jupiter V6 is dumped (fallback for the workflow)
-mkdir -p contracts/axis-g3m/fixtures
-solana program dump -u https://api.mainnet-beta.solana.com \
-  JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4 \
-  contracts/axis-g3m/fixtures/jupiter_v6.so
+# 2. Jupiter V6 binary is committed at
+#    contracts/axis-g3m/fixtures/jupiter_v6.so so step 3 below boots
+#    offline. To refresh on a Jupiter V6 program upgrade:
+#      scripts/ops/refresh-jupiter-fixture.sh
+#    then commit the resulting .so. Don't refresh casually — Jupiter V6
+#    upgrades are quarterly at most, and the test routes only break on
+#    a real ABI change.
 
 # 3. Boot the validator with everything pre-loaded
 solana-test-validator --reset --ledger /tmp/fork-ledger \

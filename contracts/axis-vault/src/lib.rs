@@ -16,6 +16,7 @@ fn panic(_info: &core::panic::PanicInfo) -> ! {
 pub mod constants;
 pub mod error;
 pub mod instructions;
+pub mod jupiter;
 pub mod state;
 
 use pinocchio::{
@@ -186,7 +187,7 @@ pub fn process_instruction(
 
         Instruction::DepositSol => {
             // Data: [sol_in: u64][min_etf_out: u64][name_len: u8][name]
-            //       [leg_count: u8][per-leg routes: variable]
+            //       [leg_count: u8][per-leg payload: variable]
             if data.len() < 18 {
                 return Err(ProgramError::InvalidInstructionData);
             }
@@ -204,14 +205,15 @@ pub fn process_instruction(
             }
             let name = &data[17..17 + name_len];
             let leg_count = data[17 + name_len];
+            let leg_data = &data[17 + name_len + 1..];
             instructions::process_deposit_sol(
-                program_id, accounts, sol_in, min_etf_out, name, leg_count,
+                program_id, accounts, sol_in, min_etf_out, name, leg_count, leg_data,
             )
         }
 
         Instruction::WithdrawSol => {
             // Data: [burn_amount: u64][min_sol_out: u64][name_len: u8][name]
-            //       [leg_count: u8][per-leg routes: variable]
+            //       [leg_count: u8][per-leg payload: variable]
             if data.len() < 18 {
                 return Err(ProgramError::InvalidInstructionData);
             }
@@ -229,8 +231,9 @@ pub fn process_instruction(
             }
             let name = &data[17..17 + name_len];
             let leg_count = data[17 + name_len];
+            let leg_data = &data[17 + name_len + 1..];
             instructions::process_withdraw_sol(
-                program_id, accounts, burn_amount, min_sol_out, name, leg_count,
+                program_id, accounts, burn_amount, min_sol_out, name, leg_count, leg_data,
             )
         }
     }

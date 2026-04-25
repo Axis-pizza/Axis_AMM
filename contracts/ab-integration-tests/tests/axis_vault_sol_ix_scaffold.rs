@@ -1,17 +1,17 @@
-//! axis-vault DepositSol / WithdrawSol scaffolding tests (#36, PR #58).
+//! axis-vault DepositSol / WithdrawSol parameter + parser tests (#36).
 //!
-//! These tests lock down the scaffolding behavior so the dispatcher +
-//! parameter validation stay correct while the Jupiter CPI body is
-//! being designed in follow-up. Each case hits one of the two early
-//! validation branches:
+//! With the Jupiter CPI body now landed (PR #58 round 2), the cheap
+//! validation gates we lock down here are:
 //!
 //!   - sol_in / burn_amount == 0 → ZeroDeposit (9004)
 //!   - leg_count == 0 or > 3    → BasketTooLargeForOnchainSol (9025)
-//!   - otherwise                → NotYetImplemented (9024)
+//!   - leg_count > 0 with too few accounts to satisfy the layout →
+//!     NotEnoughAccountKeys
 //!
-//! When the real implementation lands, the `NotYetImplemented` branch
-//! goes away and the happy-path tests move into the axis_vault_coverage
-//! sibling file.
+//! Happy-path tests that exercise the full Jupiter CPI live in the
+//! mainnet-fork harness — see `axis_vault_jupiter_fork.rs` (#61 item 5
+//! follow-up). Pure parser-level coverage stays here so the
+//! scaffolding contract surface can't drift without a regression.
 
 use ab_integration_tests::helpers::{svm_setup::*, token_factory::*};
 use ab_integration_tests::require_fixture;
@@ -24,7 +24,6 @@ use solana_signer::Signer;
 use solana_transaction::Transaction;
 
 const ERR_ZERO_DEPOSIT: u32 = 9004;
-const ERR_NOT_YET_IMPLEMENTED: u32 = 9024;
 const ERR_BASKET_TOO_LARGE: u32 = 9025;
 
 fn send(svm: &mut LiteSVM, ix: Instruction, payer: &Keypair) -> Result<u64, String> {
@@ -121,17 +120,22 @@ fn deposit_sol_rejects_basket_too_large() {
 }
 
 #[test]
-fn deposit_sol_placeholder_returns_not_yet_implemented() {
+fn deposit_sol_with_undersized_account_list_rejects() {
+    // Past parameter validation (sol_in > 0, leg_count == 2) the new
+    // implementation requires 10 + tc + per-leg route accounts. A
+    // 6-account ix can't satisfy the layout so the runtime / handler
+    // surfaces NotEnoughAccountKeys before any Jupiter CPI runs.
     require_fixture!(AXIS_VAULT_SO);
     let (mut svm, payer) = match bootstrap_svm() { Some(x) => x, None => return };
-    // sol_in > 0, leg_count within bounds → falls through parameter
-    // validation and returns the placeholder.
     let err = send(
         &mut svm,
         Instruction { program_id: axis_vault_id(), accounts: make_accounts(&payer), data: make_data(5, 1_000_000, 0, 2) },
         &payer,
-    ).err().expect("placeholder body must return NotYetImplemented");
-    assert_custom_err(&err, ERR_NOT_YET_IMPLEMENTED, "deposit_sol placeholder");
+    ).err().expect("undersized account list must reject");
+    assert!(
+        err.contains("NotEnoughAccountKeys") || err.contains("insufficient account keys"),
+        "expected NotEnoughAccountKeys, got: {err}"
+    );
 }
 
 // ─── WithdrawSol ───────────────────────────────────────────────────────
@@ -161,13 +165,43 @@ fn withdraw_sol_rejects_basket_too_large() {
 }
 
 #[test]
-fn withdraw_sol_placeholder_returns_not_yet_implemented() {
+fn withdraw_sol_with_undersized_account_list_rejects() {
     require_fixture!(AXIS_VAULT_SO);
     let (mut svm, payer) = match bootstrap_svm() { Some(x) => x, None => return };
     let err = send(
         &mut svm,
         Instruction { program_id: axis_vault_id(), accounts: make_accounts(&payer), data: make_data(6, 500_000, 0, 2) },
         &payer,
-    ).err().expect("placeholder body must return NotYetImplemented");
-    assert_custom_err(&err, ERR_NOT_YET_IMPLEMENTED, "withdraw_sol placeholder");
+    ).err().expect("undersized account list must reject");
+    assert!(
+        err.contains("NotEnoughAccountKeys") || err.contains("insufficient account keys"),
+        "expected NotEnoughAccountKeys, got: {err}"
+    );
+}
+
+#[test]
+fn deposit_sol_rejects_leg_count_zero() {
+    // leg_count = 0 routes through the same BasketTooLargeForOnchainSol
+    // gate as oversize baskets (the gate is "size in (0, 3]"). Locks
+    // down the new lower-bound branch.
+    require_fixture!(AXIS_VAULT_SO);
+    let (mut svm, payer) = match bootstrap_svm() { Some(x) => x, None => return };
+    let err = send(
+        &mut svm,
+        Instruction { program_id: axis_vault_id(), accounts: make_accounts(&payer), data: make_data(5, 1_000_000, 0, 0) },
+        &payer,
+    ).err().expect("leg_count=0 must reject");
+    assert_custom_err(&err, ERR_BASKET_TOO_LARGE, "0-leg deposit_sol");
+}
+
+#[test]
+fn withdraw_sol_rejects_leg_count_zero() {
+    require_fixture!(AXIS_VAULT_SO);
+    let (mut svm, payer) = match bootstrap_svm() { Some(x) => x, None => return };
+    let err = send(
+        &mut svm,
+        Instruction { program_id: axis_vault_id(), accounts: make_accounts(&payer), data: make_data(6, 500_000, 0, 0) },
+        &payer,
+    ).err().expect("leg_count=0 must reject");
+    assert_custom_err(&err, ERR_BASKET_TOO_LARGE, "0-leg withdraw_sol");
 }

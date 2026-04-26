@@ -174,12 +174,13 @@ ok "Wallet: $WALLET"
 ok "Balance: $BAL_RAW SOL"
 
 # Threshold scales with the number of programs in the active manifest.
-# Each ~90KB .so deploy holds ~1.3 SOL peak (buffer + program data rent;
-# returned on success). We add a 1 SOL buffer for tx fees + retry headroom.
-# Devnet faucet is rate-limited; if low, transfer from another wallet
-# (e.g. tbw.json) rather than waiting for airdrop.
+# Empirical cost from past devnet runs: ~0.6 SOL per ~90KB .so deploy
+# (buffer rent is returned, so net is just tx fees + program-data rent).
+# Add 0.5 SOL buffer for retry headroom + the rent-exempt minimum the
+# wallet must keep. Devnet faucet is rate-limited; if low, transfer
+# from another wallet rather than waiting for airdrop.
 NUM_PROGS=${#PROGRAMS[@]}
-EST_SOL=$(awk -v n="$NUM_PROGS" 'BEGIN{printf "%.1f", n*1.3 + 1}')
+EST_SOL=$(awk -v n="$NUM_PROGS" 'BEGIN{printf "%.1f", n*0.7 + 0.5}')
 EST_CENTS=$(awk -v v="$EST_SOL" 'BEGIN{printf "%d", v*100}')
 BAL_INT=$(awk -v v="$BAL_RAW" 'BEGIN{printf "%d", v*100}')
 if [ "$BAL_INT" -lt "$EST_CENTS" ]; then
@@ -249,7 +250,7 @@ if $FRESH; then
       # Already deployed — falls through to upgrade flow with this wallet
       # only if the wallet IS the existing upgrade authority. Otherwise
       # bail; otherwise we'd deploy on top of someone else's program.
-      ON_CHAIN_AUTH=$(echo "$EXISTS" | awk '/Upgrade Authority/ {print $3}')
+      ON_CHAIN_AUTH=$(echo "$EXISTS" | awk '/^Authority:/ {print $2}')
       if [ "$ON_CHAIN_AUTH" != "$WALLET" ]; then
         fail "$name: keypair derives to $pid which is ALREADY deployed on devnet with upgrade authority $ON_CHAIN_AUTH (not $WALLET). Either drop --fresh or rotate the keypair."
       fi
@@ -267,7 +268,7 @@ else
     if echo "$PROG_INFO" | grep -q "Upgradeable: false"; then
       fail "$name ($pid): NOT upgradeable on-chain. Cannot redeploy."
     fi
-    ON_CHAIN_AUTH=$(echo "$PROG_INFO" | awk '/Upgrade Authority/ {print $3}')
+    ON_CHAIN_AUTH=$(echo "$PROG_INFO" | awk '/^Authority:/ {print $2}')
     if [ -z "$ON_CHAIN_AUTH" ]; then
       fail "$name ($pid): could not read Upgrade Authority. Output:\n$PROG_INFO"
     fi
@@ -323,7 +324,7 @@ for i in "${!PROGRAMS[@]}"; do
   # Capture pre-deploy "Last Deployed Slot" so we can verify the delta.
   # On --fresh first-time deploys this read fails (program doesn't
   # exist) so we default to 0.
-  PRE_SLOT=$(solana program show "$pid" 2>/dev/null | awk '/Last Deployed/ {print $4}')
+  PRE_SLOT=$(solana program show "$pid" 2>/dev/null | awk '/^Last Deployed In Slot:/ {print $5}')
   PRE_SLOT="${PRE_SLOT:-0}"
 
   # In FRESH mode pass the keypair file directly — this both sets the
@@ -351,15 +352,23 @@ for i in "${!PROGRAMS[@]}"; do
     warn "$name: solana program deploy returned $DEPLOY_RC — checking on-chain anyway"
   fi
 
-  # Verify post-deploy: slot advanced + executable. Retry up to 5 times
-  # with 2s backoff for RPC propagation delay (devnet RPC can lag a few
-  # seconds after a successful deploy).
+  # Verify post-deploy: slot advanced + BPFLoaderUpgradeable owns it.
+  # Retry up to 5 times with 2s backoff for RPC propagation delay
+  # (devnet RPC can lag a few seconds after a successful deploy).
+  #
+  # Note: `solana program show` doesn't print an "Executable:" line —
+  # programs that show up at all under it are by definition executable.
+  # We assert Owner=BPFLoaderUpgradeable to catch the edge case where
+  # the keypair points at a non-program account.
+  #
+  # The "Last Deployed In Slot: <N>" line splits into 5 fields, so we
+  # take $5 (not $4 which is "Slot:").
   POST_SLOT=""
-  IS_EXEC=""
+  POST_OWNER=""
   for try in 1 2 3 4 5; do
     POST_INFO=$(solana program show "$pid" 2>/dev/null || true)
-    POST_SLOT=$(echo "$POST_INFO" | awk '/Last Deployed/ {print $4}')
-    IS_EXEC=$(echo "$POST_INFO" | awk '/Executable/ {print $2}')
+    POST_SLOT=$(echo "$POST_INFO" | awk '/^Last Deployed In Slot:/ {print $5}')
+    POST_OWNER=$(echo "$POST_INFO" | awk '/^Owner:/ {print $2}')
     if [ -n "$POST_SLOT" ] && [ "$POST_SLOT" -gt "$PRE_SLOT" ]; then
       break
     fi
@@ -369,7 +378,7 @@ for i in "${!PROGRAMS[@]}"; do
   if [ -z "$POST_SLOT" ] || [ "$POST_SLOT" -le "$PRE_SLOT" ]; then
     fail "$name: Last Deployed Slot did not advance after 5 retries (pre=$PRE_SLOT post=$POST_SLOT). solana program deploy returned $DEPLOY_RC."
   fi
-  if [ "$IS_EXEC" != "true" ]; then
+  if [ "$POST_OWNER" != "BPFLoaderUpgradeab1e11111111111111111111111" ]; then
     fail "$name: program not executable post-deploy"
   fi
   ok "$name: deployed at slot $POST_SLOT (was $PRE_SLOT)"

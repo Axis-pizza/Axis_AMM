@@ -1,0 +1,36 @@
+@import "tailwindcss";
+
+/* Wallet-adapter UI ships its own CSS that we want to override
+ * for the dark theme. Pull the upstream sheet in via @import,
+ * then override the few selectors that matter. */
+@import "@solana/wallet-adapter-react-ui/styles.css";
+
+:root {
+  color-scheme: dark;
+}
+
+/* Tighter wallet button styling so it matches the Tailwind layout. */
+.wallet-adapter-button {
+  background-color: rgb(99 102 241) !important; /* indigo-500 */
+  border-radius: 0.5rem !important;
+  font-weight: 600 !important;
+  font-size: 0.875rem !important;
+  height: 2.5rem !important;
+  padding: 0 1rem !important;
+}
+.wallet-adapter-button:not([disabled]):hover {
+  background-color: rgb(79 70 229) !important; /* indigo-600 */
+}
+.wallet-adapter-modal-wrapper {
+  background-color: rgb(15 23 42) !important; /* slate-900 */
+}
+.wallet-adapter-modal-title {
+  color: rgb(241 245 249) !important; /* slate-100 */
+}
+.wallet-adapter-modal-list .wallet-adapter-button {
+  background-color: rgb(30 41 59) !important; /* slate-800 */
+  color: rgb(241 245 249) !important;
+}
+.wallet-adapter-modal-list .wallet-adapter-button:hover {
+  background-color: rgb(51 65 85) !important; /* slate-700 */
+}

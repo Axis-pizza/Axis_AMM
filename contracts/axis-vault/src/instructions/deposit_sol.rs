@@ -121,7 +121,7 @@ pub fn process_deposit_sol(
     }
 
     // ─── load etf state ────────────────────────────────────────────
-    let (token_count, total_supply, authority, weights, bump_seed, fee_bps, treasury, etf_mint, token_vaults) = {
+    let (token_count, total_supply, authority, weights, bump_seed, fee_bps, treasury, etf_mint, token_vaults, tvl_cap) = {
         let data = etf_state_ai.try_borrow_data()?;
         let etf =
             unsafe { load::<EtfState>(&data) }.ok_or(ProgramError::InvalidAccountData)?;
@@ -141,6 +141,7 @@ pub fn process_deposit_sol(
             etf.treasury,
             etf.etf_mint,
             etf.token_vaults,
+            etf.tvl_cap,
         )
     };
 
@@ -169,9 +170,18 @@ pub fn process_deposit_sol(
         }
     }
 
-    // Vault keys must match etf.token_vaults[i] one-for-one.
+    // Vault keys must match etf.token_vaults[i] one-for-one AND be owned
+    // by the SPL Token Program. Owner check (parity with axis-g3m
+    // verify_vault) closes the window where a vault is closed/reassigned
+    // between the key check and the Jupiter CPI — without it,
+    // read_token_account_balance could parse arbitrary bytes as a u64
+    // balance and corrupt the mint calculation.
     for i in 0..tc {
-        if accounts[FIXED_ACCOUNTS + i].key() != &token_vaults[i] {
+        let v = &accounts[FIXED_ACCOUNTS + i];
+        if v.key() != &token_vaults[i] {
+            return Err(VaultError::VaultMismatch.into());
+        }
+        if v.owner() != &TOKEN_PROGRAM_ID {
             return Err(VaultError::VaultMismatch.into());
         }
     }
@@ -337,6 +347,18 @@ pub fn process_deposit_sol(
 
     if mint_amount < min_etf_out {
         return Err(VaultError::SlippageExceeded.into());
+    }
+
+    // TVL cap (parity with Deposit). Mirrors deposit.rs comments — see
+    // there for rationale. Enforced after slippage so the user sees the
+    // more specific failure first.
+    if tvl_cap > 0 {
+        let projected = total_supply
+            .checked_add(mint_amount)
+            .ok_or(VaultError::Overflow)?;
+        if projected > tvl_cap {
+            return Err(VaultError::TvlCapExceeded.into());
+        }
     }
 
     // ─── fee + mint ────────────────────────────────────────────────

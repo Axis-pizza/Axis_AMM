@@ -40,6 +40,12 @@ enum Instruction {
     DepositSol = 5,
     /// WithdrawSol — SOL-out variant, same status as DepositSol.
     WithdrawSol = 6,
+    /// SetFee — authority-gated `fee_bps` adjustment within
+    /// `[0, max_fee_bps]`. Pre-mainnet hardening.
+    SetFee = 7,
+    /// SetCap — authority-gated TVL cap, monotonically non-decreasing
+    /// (zero opts out). Pre-mainnet hardening for closed-beta ramp.
+    SetCap = 8,
 }
 
 impl Instruction {
@@ -52,6 +58,8 @@ impl Instruction {
             4 => Some(Instruction::SetPaused),
             5 => Some(Instruction::DepositSol),
             6 => Some(Instruction::WithdrawSol),
+            7 => Some(Instruction::SetFee),
+            8 => Some(Instruction::SetCap),
             _ => None,
         }
     }
@@ -236,6 +244,27 @@ pub fn process_instruction(
                 program_id, accounts, burn_amount, min_sol_out, name, leg_count, leg_data,
             )
         }
+
+        Instruction::SetFee => {
+            // Data: [new_fee_bps: u16 LE]
+            if data.len() < 2 {
+                return Err(ProgramError::InvalidInstructionData);
+            }
+            let new_fee_bps = u16::from_le_bytes([data[0], data[1]]);
+            instructions::process_set_fee(program_id, accounts, new_fee_bps)
+        }
+
+        Instruction::SetCap => {
+            // Data: [new_cap: u64 LE]
+            if data.len() < 8 {
+                return Err(ProgramError::InvalidInstructionData);
+            }
+            let new_cap = u64::from_le_bytes([
+                data[0], data[1], data[2], data[3],
+                data[4], data[5], data[6], data[7],
+            ]);
+            instructions::process_set_cap(program_id, accounts, new_cap)
+        }
     }
 }
 
@@ -256,9 +285,13 @@ mod tests {
         eprintln!("  weights_bps: {}", (&e.weights_bps as *const _ as usize) - b);
         eprintln!("  total_supply: {}", (&e.total_supply as *const _ as usize) - b);
         eprintln!("  treasury: {}", (&e.treasury as *const _ as usize) - b);
+        eprintln!("  fee_bps: {}", (&e.fee_bps as *const _ as usize) - b);
+        eprintln!("  paused: {}", (&e.paused as *const _ as usize) - b);
         eprintln!("  bump: {}", (&e.bump as *const _ as usize) - b);
         eprintln!("  name: {}", (&e.name as *const _ as usize) - b);
         eprintln!("  ticker: {}", (&e.ticker as *const _ as usize) - b);
         eprintln!("  created_at_slot: {}", (&e.created_at_slot as *const _ as usize) - b);
+        eprintln!("  max_fee_bps: {}", (&e.max_fee_bps as *const _ as usize) - b);
+        eprintln!("  tvl_cap: {}", (&e.tvl_cap as *const _ as usize) - b);
     }
 }

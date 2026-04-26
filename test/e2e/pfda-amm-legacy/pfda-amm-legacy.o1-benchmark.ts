@@ -32,7 +32,7 @@ import {
 import * as fs from "fs";
 import * as os from "os";
 
-const PROGRAM_ID = new PublicKey("5BKDTDQdX7vFdDooVXZeKicu7S3yX2JY5e3rmASib5pY");
+const PROGRAM_ID = new PublicKey(process.env.PROGRAM_ID ?? "5BKDTDQdX7vFdDooVXZeKicu7S3yX2JY5e3rmASib5pY");
 const RPC_URL    = "http://localhost:8899";
 
 // ─── helpers ───────────────────────────────────────────────────────────────

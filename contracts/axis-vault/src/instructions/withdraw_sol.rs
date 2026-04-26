@@ -154,8 +154,18 @@ pub fn process_withdraw_sol(
         }
     }
 
+    // Vault keys must match etf.token_vaults[i] one-for-one AND be owned
+    // by the SPL Token Program. Owner check (parity with axis-g3m
+    // verify_vault and matching DepositSol) closes the window where a
+    // vault is closed/reassigned between the key check and the Jupiter
+    // CPI — without it, read_token_account_balance could parse arbitrary
+    // bytes as a u64 balance and corrupt the burn-share calculation.
     for i in 0..tc {
-        if accounts[FIXED_ACCOUNTS + i].key() != &token_vaults[i] {
+        let v = &accounts[FIXED_ACCOUNTS + i];
+        if v.key() != &token_vaults[i] {
+            return Err(VaultError::VaultMismatch.into());
+        }
+        if v.owner() != &TOKEN_PROGRAM_ID {
             return Err(VaultError::VaultMismatch.into());
         }
     }

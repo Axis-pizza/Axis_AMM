@@ -13,7 +13,7 @@ import {
 import * as fs from "fs";
 import * as os from "os";
 
-const PROGRAM_ID = new PublicKey("CSBgQGeBTiAu4a9Kgoas2GyR8wbHg5jxctQjq3AenKk");
+const PROGRAM_ID = new PublicKey(process.env.PROGRAM_ID ?? "CSBgQGeBTiAu4a9Kgoas2GyR8wbHg5jxctQjq3AenKk");
 const RPC_URL = "https://api.devnet.solana.com";
 const WINDOW_SLOTS = 100n;
 

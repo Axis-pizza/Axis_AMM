@@ -21,7 +21,7 @@ import {
 import * as fs from "fs";
 import * as os from "os";
 
-const PROGRAM_ID = new PublicKey("65aE9QdVz5bapV19BGt5cyTgVitYpekGwusRoQEovNUi");
+const PROGRAM_ID = new PublicKey(process.env.PROGRAM_ID ?? "65aE9QdVz5bapV19BGt5cyTgVitYpekGwusRoQEovNUi");
 const JUPITER_V6 = new PublicKey("JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4");
 const RPC_URL = process.env.RPC_URL ?? "http://localhost:8899";
 

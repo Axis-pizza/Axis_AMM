@@ -316,6 +316,32 @@ const ERR_VAULT_MISMATCH: u32 = 9013;
 ///   484  ticker [u8;16]
 ///   504  created_at_slot u64
 ///   512  _padding [u8;4]
+/// Build an EtfState v3 (etfstat3) byte blob for `set_account` seeding.
+///
+/// Layout (536 bytes — verified via `cargo test print_sizes`):
+///   0..8     discriminator b"etfstat3"
+///   8..40    authority
+///   40..72   etf_mint
+///   72       token_count
+///   73..233  token_mints[5]
+///   233..393 token_vaults[5]
+///   394..404 weights_bps[5]                  (1B align pad before)
+///   408..416 total_supply                    (4B align pad before)
+///   416..448 treasury
+///   448..450 fee_bps
+///   450      paused
+///   451      bump
+///   452..484 name
+///   484..500 ticker
+///   504..512 created_at_slot                 (4B align pad before)
+///   512..514 max_fee_bps
+///   514..516 _pad
+///   520..528 tvl_cap                         (4B align pad before)
+///   528..532 _padding
+///   (532..536 trailing struct alignment)
+///
+/// fee_bps defaults to 30, max_fee_bps to 300 (program ceiling),
+/// tvl_cap to 0 (uncapped) — matching CreateEtf defaults.
 #[allow(clippy::too_many_arguments)]
 fn build_etf_state(
     authority: &Address,
@@ -329,8 +355,8 @@ fn build_etf_state(
     bump: u8,
     name: &[u8],
 ) -> Vec<u8> {
-    let mut d = vec![0u8; 520];
-    d[0..8].copy_from_slice(b"etfstat2");
+    let mut d = vec![0u8; 536];
+    d[0..8].copy_from_slice(b"etfstat3");
     d[8..40].copy_from_slice(authority.as_ref());
     d[40..72].copy_from_slice(etf_mint.as_ref());
     d[72] = token_count;
@@ -346,6 +372,8 @@ fn build_etf_state(
     d[451] = bump;
     d[452..452 + name.len()].copy_from_slice(name);
     d[484..484 + 2].copy_from_slice(b"AX");
+    d[512..514].copy_from_slice(&300u16.to_le_bytes()); // max_fee_bps = MAX_FEE_BPS_CEILING
+    // tvl_cap [520..528) and _padding [528..532) stay zero
     d
 }
 

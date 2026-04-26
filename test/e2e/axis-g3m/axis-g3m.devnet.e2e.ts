@@ -40,8 +40,13 @@ import * as os from "os";
 
 // ─── Config ───────────────────────────────────────────────────────────────
 
-const PROGRAM_ID = new PublicKey("65aE9QdVz5bapV19BGt5cyTgVitYpekGwusRoQEovNUi");
+const PROGRAM_ID = new PublicKey(process.env.PROGRAM_ID ?? "65aE9QdVz5bapV19BGt5cyTgVitYpekGwusRoQEovNUi");
 const RPC_URL = "https://api.devnet.solana.com";
+// Jupiter V6 aggregator — attestation-mode Rebalance (#33 hardening)
+// requires this pubkey as a witness at account index 2. The program
+// only checks the pubkey, so the Jupiter program need not be loaded
+// on the validator for the witness slot to validate.
+const JUPITER_V6_PROGRAM = new PublicKey("JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4");
 
 const TOKEN_COUNT = 5;
 const FEE_RATE_BPS = 100;           // 1%
@@ -295,6 +300,12 @@ function ixRebalance(
     keys: [
       { pubkey: authority, isSigner: true,  isWritable: false },
       { pubkey: poolState, isSigner: false, isWritable: true  },
+      // #33: attestation-mode Rebalance now requires the Jupiter program
+      // pubkey at index 2 as a witness, even though no CPI happens — it
+      // turns "no vaults provided = attestation mode" into an explicit
+      // opt-in. Without this slot the program returns 7022
+      // (AttestationRequiresJupiter).
+      { pubkey: JUPITER_V6_PROGRAM, isSigner: false, isWritable: false },
     ],
     data,
   });

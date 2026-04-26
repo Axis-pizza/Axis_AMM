@@ -108,9 +108,17 @@ pub fn process_withdraw(
     // Account layout note: Withdraw puts vaults in [6..6+tc] and user ATAs in
     // [6+tc..6+2*tc] — the reverse of Deposit, because funds flow vault → user
     // here. Keep the two in sync.
+    //
+    // Vaults must be owned by the SPL Token Program: vault_balance is read
+    // from data[64..72] later in this function; without the owner check, a
+    // crafted account with the right key but different owner could feed
+    // arbitrary bytes into the proportional-payout math.
     for i in 0..tc {
         let vault = &accounts[6 + i];
         if vault.key() != &token_vaults[i] {
+            return Err(VaultError::VaultMismatch.into());
+        }
+        if vault.owner() != &TOKEN_PROGRAM_ID {
             return Err(VaultError::VaultMismatch.into());
         }
     }

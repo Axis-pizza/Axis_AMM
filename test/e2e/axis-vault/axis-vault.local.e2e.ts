@@ -14,7 +14,7 @@ import {
 import * as fs from "fs";
 import * as os from "os";
 
-const PROGRAM_ID = new PublicKey("DeeUnCHcnPG8arbjGTLhTKeDhpPUBper3TDrpFPHnCwy");
+const PROGRAM_ID = new PublicKey(process.env.PROGRAM_ID ?? "DeeUnCHcnPG8arbjGTLhTKeDhpPUBper3TDrpFPHnCwy");
 const RPC_URL = process.env.RPC_URL ?? "https://api.devnet.solana.com";
 const ETF_NAME = process.env.ETF_NAME ?? `AX${Date.now().toString(36).toUpperCase().slice(-10)}`;
 // Ticker: ASCII upper/digits only, 2..=16 bytes (issue #37). Default stays

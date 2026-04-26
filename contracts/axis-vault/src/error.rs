@@ -66,6 +66,24 @@ pub enum VaultError {
     /// Per-leg payload (leg_sol_amount + route_len + route_bytes) was
     /// truncated, malformed, or went past the instruction-data tail.
     MalformedLegData = 9032,
+    /// SetFee rejected: requested `new_fee_bps` exceeds the per-ETF
+    /// `max_fee_bps` ceiling captured at CreateEtf time, or exceeds
+    /// the program-wide `MAX_FEE_BPS_CEILING`. The hard ceiling
+    /// protects users from a compromised authority key dialling fees
+    /// up to 100 % and draining deposits.
+    FeeTooHigh = 9033,
+    /// Deposit / DepositSol rejected: the resulting `total_supply`
+    /// would exceed `tvl_cap`. Closed-beta ramp gate. Either wait for
+    /// the authority to raise the cap (SetCap) or deposit a smaller
+    /// amount.
+    TvlCapExceeded = 9034,
+    /// SetCap rejected: requested `new_cap` is below the current cap.
+    /// Lowering the cap would strand any pool currently above it
+    /// (deposits revert with TvlCapExceeded but withdrawals pay the
+    /// per-vault share computed against current state — there's no
+    /// in-protocol drain path back to the lower cap). The cap is
+    /// monotonically increasing.
+    InvalidCapDecrease = 9035,
 }
 
 impl From<VaultError> for ProgramError {

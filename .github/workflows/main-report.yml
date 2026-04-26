@@ -80,7 +80,14 @@ jobs:
           cd contracts/ab-integration-tests
           cargo test --test ab_comparison test_ab_multi_scenario_report -- --nocapture
 
-      - name: Run LiteSVM PR validation
+      - name: Run LiteSVM PR validation (with enforced A/B gate)
+        # ENFORCE_AB_GATE=true makes the test panic if any gate (P95 CU,
+        # latency, quality, reliability, significance) fails on main.
+        # Without this env var the gate is computed and written to the
+        # report but never asserted — green CI silently masking a 30%
+        # CU regression.
+        env:
+          ENFORCE_AB_GATE: "true"
         run: |
           cd contracts/ab-integration-tests
           cargo test --test ab_comparison test_ab_pr_validation_litesvm -- --nocapture

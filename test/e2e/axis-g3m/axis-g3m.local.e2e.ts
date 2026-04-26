@@ -40,7 +40,7 @@ import * as os from "os";
 
 // ─── Config ───────────────────────────────────────────────────────────────
 
-const PROGRAM_ID = new PublicKey("65aE9QdVz5bapV19BGt5cyTgVitYpekGwusRoQEovNUi");
+const PROGRAM_ID = new PublicKey(process.env.PROGRAM_ID ?? "65aE9QdVz5bapV19BGt5cyTgVitYpekGwusRoQEovNUi");
 const RPC_URL = "http://localhost:8899";
 // Jupiter V6 aggregator — attestation-mode Rebalance (#33 hardening)
 // requires this pubkey as a witness at account index 2. The program

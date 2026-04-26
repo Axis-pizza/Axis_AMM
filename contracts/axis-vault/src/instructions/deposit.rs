@@ -60,7 +60,7 @@ pub fn process_deposit(
     }
 
     // Load ETF state
-    let (tc, total_supply, authority, weights, bump_seed, fee_bps, treasury, etf_mint, token_vaults) = {
+    let (tc, total_supply, authority, weights, bump_seed, fee_bps, treasury, etf_mint, token_vaults, tvl_cap) = {
         let data = etf_state_ai.try_borrow_data()?;
         let etf = unsafe { load::<EtfState>(&data) }
             .ok_or(ProgramError::InvalidAccountData)?;
@@ -80,6 +80,7 @@ pub fn process_deposit(
             etf.treasury,
             etf.etf_mint,
             etf.token_vaults,
+            etf.tvl_cap,
         )
     };
 
@@ -118,9 +119,17 @@ pub fn process_deposit(
     // Account layout note: Deposit puts user ATAs in [6..6+tc] and vaults in
     // [6+tc..6+2*tc] (treasury_etf_ata occupies slot 5). Withdraw flips user/
     // vault ordering because funds flow the opposite direction. Keep in sync.
+    //
+    // Vaults must be owned by the SPL Token Program: vault_balance is read
+    // from data[64..72] later in this function; without the owner check, a
+    // crafted account with the right key but different owner could feed
+    // arbitrary bytes into the proportional-mint math.
     for i in 0..tc {
         let vault = &accounts[6 + tc + i];
         if vault.key() != &token_vaults[i] {
+            return Err(VaultError::VaultMismatch.into());
+        }
+        if vault.owner() != &TOKEN_PROGRAM_ID {
             return Err(VaultError::VaultMismatch.into());
         }
     }
@@ -202,6 +211,22 @@ pub fn process_deposit(
     // Slippage check (fires before any transfer — cheap failure on stale quotes)
     if mint_amount < min_mint_out {
         return Err(VaultError::SlippageExceeded.into());
+    }
+
+    // TVL cap: only enforced when tvl_cap > 0 (zero = uncapped).
+    // Authority sets a non-zero cap via SetCap to gate closed-beta
+    // ramp; a deposit that would push total_supply above the cap
+    // reverts before any transfer. We compare against `mint_amount`
+    // (the gross figure that gets added to total_supply) rather than
+    // `net_mint`, because total_supply tracks gross including the
+    // virtual liquidity lock and treasury fee tokens.
+    if tvl_cap > 0 {
+        let projected = total_supply
+            .checked_add(mint_amount)
+            .ok_or(VaultError::Overflow)?;
+        if projected > tvl_cap {
+            return Err(VaultError::TvlCapExceeded.into());
+        }
     }
 
     // Compute fee

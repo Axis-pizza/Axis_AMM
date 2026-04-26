@@ -36,6 +36,26 @@ pub const MIN_FIRST_DEPOSIT: u64 = 1_000_000;
 /// is permanently stranded in the vaults, which is the intended cost.
 pub const MINIMUM_LIQUIDITY: u64 = 1_000;
 
+/// Program-wide hard ceiling for `fee_bps`. SetFee rejects above this
+/// regardless of per-ETF `max_fee_bps`. Belt-and-suspenders against a
+/// compromised authority dialling fees up to 100 % to drain a pool;
+/// 300 bps (3 %) is well above any realistic AMM fee while leaving
+/// no room for fee-as-attack. Per-ETF `max_fee_bps` set at CreateEtf
+/// time may be lower (e.g. 100 bps for stable-stable baskets) but
+/// can never exceed this.
+pub const MAX_FEE_BPS_CEILING: u16 = 300;
+
+/// Default fee captured at CreateEtf for the v3 EtfState. Authority
+/// can adjust via SetFee within `[0, max_fee_bps]`.
+pub const DEFAULT_FEE_BPS: u16 = 30;
+
+/// Default per-ETF `max_fee_bps` written by CreateEtf. Authority can
+/// not raise this — it's the per-ETF ceiling. CreateEtf accepts
+/// callers wanting to lock in a tighter ceiling via instruction data
+/// (future enhancement); for now we set the program-wide ceiling and
+/// let SetFee operate freely below it.
+pub const DEFAULT_MAX_FEE_BPS: u16 = MAX_FEE_BPS_CEILING;
+
 /// Protocol treasury multisig address — the single destination for
 /// protocol fee revenue.
 ///

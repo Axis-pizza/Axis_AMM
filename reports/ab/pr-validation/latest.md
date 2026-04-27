@@ -1,8 +1,8 @@
 # Axis A/B PR Validation Report
 
-- Generated At: 1777138147s-since-epoch
-- Run ID: ab-pr-validation-1777138039
-- Base Seed: 20260408-1777138039
+- Generated At: 1777254718s-since-epoch
+- Run ID: ab-pr-validation-1777254602
+- Base Seed: 20260408-1777254602
 - Repeats/Scenario: 50
 
 ## Fairness Rules
@@ -23,74 +23,74 @@
 
 ### Multi-Metric Gate
 
-- Baseline: PFDA-3
-- Candidate: G3M
-- Gate Result: **FAIL**
+- Baseline: G3M
+- Candidate: PFDA-3
+- Gate Result: **PASS**
 
 | Gate | Pass | Detail |
 |---|---|---|
-| P95 CU Gate | YES | samples_ok=true (4 scenarios >=30 comparable runs), candidate(g3m) p95_total_cu=39206.05 vs baseline(pfda3) 46741.00 (limit <= +10%) |
-| P50 Latency Gate | YES | success baseline/candidate = 79.68% / 100.00%, p50 slots baseline/candidate = 11.00 / 1.00, limit <= +20% |
-| Quality Gate | NO | p50 slippage baseline/candidate = 75.01 / 137.51 bps; compensation_via_cu=NO |
-| Reliability Gate | YES | candidate success=100.00% (>=99%), candidate critical invariant violations=0 |
-| Significance Gate | YES | N=200 comparable, sample_rule=true (4 / 4 scenarios >=30 comparable runs) | total_cu p=0.000000013433361534254118 ci=Some([1687.4656249999975, 3802.717499999999]) | slippage p=0 ci=Some([68.22701347912684, 78.26778533489951]) |
+| P95 CU Gate | YES | samples_ok=true (4 scenarios >=30 comparable runs), candidate(pfda3) p95_total_cu=46770.05 vs baseline(g3m) 39286.35 (limit <= +30%) |
+| P95 Latency Gate | YES | candidate(pfda3) p95 slots=11.00 (limit <= 30; ≈ batch window + buffer); reference success rates pfda/g3m = 74.63% / 100.00% |
+| Quality Gate | YES | p50 slippage candidate(pfda3)/baseline(g3m) = 50.11 / 146.74 bps; compensation_via_cu=NO |
+| Reliability Gate | YES | candidate(pfda3) critical invariant violations=0 (must be 0); reference: g3m violations=0, candidate tx-success=74.63% (informational — strict-mode oracle rejections by design) |
+| Significance Gate | YES | N=200 comparable, sample_rule=true (4 / 4 scenarios >=30 comparable runs) | total_cu p=0.000000011429448942834597 ci=Some([2053.408625000002, 4064.317875000001]) | slippage p=0 ci=Some([80.81588067846793, 88.38851807384853]) |
 
 ### Scenario: scenario-01
 
-- Description: reserve=1000000000 | swap_ratio=100bps | drift_ratio=1000bps | fee=30bps | sampled_tokens=5
-- Scenario seed: 20260408-1777138039-scenario-01
-- Token sample: ["USDC", "mSOL", "USDT", "JUP", "wSOL"]
-- Comparison tokens: ["USDC", "mSOL", "USDT"]
+- Description: reserve=1000000 | swap_ratio=100bps | drift_ratio=500bps | fee=50bps | sampled_tokens=4
+- Scenario seed: 20260408-1777254602-scenario-01
+- Token sample: ["mSOL", "bSOL", "USDT", "USDC"]
+- Comparison tokens: ["mSOL", "bSOL", "USDT"]
 - Comparable for gate: true
 - Target repeats: 50
-- Attempts: 101
+- Attempts: 79
 - Comparable runs: 50
 
 | Metric | ETF A (PFDA-3) | ETF B (G3M) |
 |---|---:|---:|
-| Total CU p50/p95 | 31741.00 / 47565.45 | 34708.50 / 40025.00 |
-| Slippage bps p50/p95 | 30.00 / 30.00 | 127.22 / 128.56 |
+| Total CU p50/p95 | 31769.00 / 45269.00 | 36194.00 / 39194.00 |
+| Slippage bps p50/p95 | 50.44 / 50.96 | 146.74 / 148.49 |
 | Slots-to-finality p50/p95 | 11.00 / 11.00 | 1.00 / 1.00 |
-| Success rate | 49.50% | 100.00% |
+| Success rate | 63.29% | 100.00% |
 
 Significance checks:
 
 | Metric | Δ mean (candidate - baseline) | 95% bootstrap CI | Mann-Whitney p |
 |---|---:|---|---:|
-| total_cu | 2297.0600 | [-72.8205, 4428.2750] | 0.053123 |
-| slippage_bps | 97.2019 | [96.9407, 97.4562] | 0.000000 |
+| total_cu | 2808.7400 | [649.1525, 4877.1675] | 0.002855 |
+| slippage_bps | 96.1440 | [95.8297, 96.4445] | 0.000000 |
 
 ### Scenario: scenario-02
 
-- Description: reserve=100000000 | swap_ratio=75bps | drift_ratio=1000bps | fee=50bps | sampled_tokens=4
-- Scenario seed: 20260408-1777138039-scenario-02
-- Token sample: ["mSOL", "bSOL", "wSOL", "JUP"]
-- Comparison tokens: ["mSOL", "bSOL", "wSOL"]
+- Description: reserve=100000000 | swap_ratio=100bps | drift_ratio=1000bps | fee=50bps | sampled_tokens=5
+- Scenario seed: 20260408-1777254602-scenario-02
+- Token sample: ["mSOL", "USDT", "JTO", "bSOL", "wSOL"]
+- Comparison tokens: ["mSOL", "USDT", "JTO"]
 - Comparable for gate: true
 - Target repeats: 50
-- Attempts: 50
+- Attempts: 89
 - Comparable runs: 50
 
 | Metric | ETF A (PFDA-3) | ETF B (G3M) |
 |---|---:|---:|
-| Total CU p50/p95 | 31741.00 / 45390.45 | 34710.00 / 37706.40 |
-| Slippage bps p50/p95 | 50.01 / 50.01 | 124.13 / 125.78 |
+| Total CU p50/p95 | 30272.00 / 49247.00 | 34710.50 / 40686.60 |
+| Slippage bps p50/p95 | 50.00 / 50.01 | 146.75 / 148.27 |
 | Slots-to-finality p50/p95 | 11.00 / 11.00 | 1.00 / 1.00 |
-| Success rate | 100.00% | 100.00% |
+| Success rate | 56.18% | 100.00% |
 
 Significance checks:
 
 | Metric | Δ mean (candidate - baseline) | 95% bootstrap CI | Mann-Whitney p |
 |---|---:|---|---:|
-| total_cu | 1376.2600 | [-933.2420, 3538.4630] | 0.215808 |
-| slippage_bps | 74.1021 | [73.7411, 74.4200] | 0.000000 |
+| total_cu | 3289.5400 | [920.6965, 5361.6095] | 0.000738 |
+| slippage_bps | 96.8021 | [96.5110, 97.0888] | 0.000000 |
 
 ### Scenario: scenario-03
 
-- Description: reserve=100000000 | swap_ratio=75bps | drift_ratio=500bps | fee=100bps | sampled_tokens=3
-- Scenario seed: 20260408-1777138039-scenario-03
-- Token sample: ["USDC", "JUP", "JTO"]
-- Comparison tokens: ["USDC", "JUP", "JTO"]
+- Description: reserve=10000000 | swap_ratio=75bps | drift_ratio=1200bps | fee=50bps | sampled_tokens=5
+- Scenario seed: 20260408-1777254602-scenario-03
+- Token sample: ["bSOL", "wSOL", "JTO", "USDC", "JUP"]
+- Comparison tokens: ["bSOL", "wSOL", "JTO"]
 - Comparable for gate: true
 - Target repeats: 50
 - Attempts: 50
@@ -98,8 +98,8 @@ Significance checks:
 
 | Metric | ETF A (PFDA-3) | ETF B (G3M) |
 |---|---:|---:|
-| Total CU p50/p95 | 31740.00 / 42390.55 | 34716.50 / 39211.35 |
-| Slippage bps p50/p95 | 100.00 / 100.01 | 173.21 / 174.92 |
+| Total CU p50/p95 | 31770.00 / 42270.00 | 36186.00 / 39207.65 |
+| Slippage bps p50/p95 | 50.06 / 50.12 | 123.78 / 125.48 |
 | Slots-to-finality p50/p95 | 11.00 / 11.00 | 1.00 / 1.00 |
 | Success rate | 100.00% | 100.00% |
 
@@ -107,15 +107,15 @@ Significance checks:
 
 | Metric | Δ mean (candidate - baseline) | 95% bootstrap CI | Mann-Whitney p |
 |---|---:|---|---:|
-| total_cu | 4137.1200 | [2156.3195, 5966.5195] | 0.000007 |
-| slippage_bps | 73.1099 | [72.7583, 73.4471] | 0.000000 |
+| total_cu | 3406.5200 | [1668.4880, 5145.6955] | 0.007998 |
+| slippage_bps | 73.4672 | [73.1235, 73.8205] | 0.000000 |
 
 ### Scenario: scenario-04
 
-- Description: reserve=1000000 | swap_ratio=50bps | drift_ratio=800bps | fee=100bps | sampled_tokens=3
-- Scenario seed: 20260408-1777138039-scenario-04
-- Token sample: ["USDC", "JUP", "USDT"]
-- Comparison tokens: ["USDC", "JUP", "USDT"]
+- Description: reserve=100000000 | swap_ratio=75bps | drift_ratio=800bps | fee=100bps | sampled_tokens=3
+- Scenario seed: 20260408-1777254602-scenario-04
+- Token sample: ["USDC", "bSOL", "mSOL"]
+- Comparison tokens: ["USDC", "bSOL", "mSOL"]
 - Comparable for gate: true
 - Target repeats: 50
 - Attempts: 50
@@ -123,8 +123,8 @@ Significance checks:
 
 | Metric | ETF A (PFDA-3) | ETF B (G3M) |
 |---|---:|---:|
-| Total CU p50/p95 | 31738.00 / 46063.00 | 36184.50 / 39208.65 |
-| Slippage bps p50/p95 | 100.91 / 101.90 | 148.28 / 150.41 |
+| Total CU p50/p95 | 31771.50 / 47596.55 | 34719.50 / 40710.60 |
+| Slippage bps p50/p95 | 100.00 / 100.01 | 172.67 / 174.75 |
 | Slots-to-finality p50/p95 | 11.00 / 11.00 | 1.00 / 1.00 |
 | Success rate | 100.00% | 100.00% |
 
@@ -132,8 +132,8 @@ Significance checks:
 
 | Metric | Δ mean (candidate - baseline) | 95% bootstrap CI | Mann-Whitney p |
 |---|---:|---|---:|
-| total_cu | 3290.2000 | [1370.4300, 5270.8830] | 0.000397 |
-| slippage_bps | 47.5955 | [47.2466, 47.9615] | 0.000000 |
+| total_cu | 2760.1400 | [600.3305, 4829.8835] | 0.023073 |
+| slippage_bps | 72.8684 | [72.5269, 73.2151] | 0.000000 |
 
 ## Environment: local-validator
 

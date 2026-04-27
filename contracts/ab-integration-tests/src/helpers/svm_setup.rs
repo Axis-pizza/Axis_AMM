@@ -29,6 +29,15 @@ pub const JUPITER_V6_SO: &str = concat!(
     "/../axis-g3m/fixtures/jupiter_v6.so"
 );
 
+/// Drain-only Jupiter substitute used by axis-vault WithdrawSol bound
+/// tests. See `contracts/ab-integration-tests/mock-jupiter/` for the
+/// program source. Loaded into LiteSVM at the canonical
+/// `JUPITER_V6_ID` so axis-vault's `JUPITER_PROGRAM_ID` check passes.
+pub const MOCK_JUPITER_SO: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/fixtures/mock_jupiter.so"
+);
+
 #[macro_export]
 macro_rules! require_fixture {
     ($path:expr) => {

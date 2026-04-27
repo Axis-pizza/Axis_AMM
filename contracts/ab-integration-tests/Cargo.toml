@@ -40,6 +40,10 @@ name = "axis_vault_sol_ix_scaffold"
 path = "tests/axis_vault_sol_ix_scaffold.rs"
 
 [[test]]
+name = "axis_vault_withdraw_sol_bound"
+path = "tests/axis_vault_withdraw_sol_bound.rs"
+
+[[test]]
 name = "axis_vault_setfee_setcap"
 path = "tests/axis_vault_setfee_setcap.rs"
 

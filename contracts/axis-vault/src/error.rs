@@ -84,6 +84,13 @@ pub enum VaultError {
     /// in-protocol drain path back to the lower cap). The cap is
     /// monotonically increasing.
     InvalidCapDecrease = 9035,
+    /// WithdrawSol rejected: the per-leg Jupiter CPI consumed more
+    /// from `vault[i]` than the burn-share `per_vault_amount[i]`
+    /// allows. Defends against a malicious `route_bytes.inAmount`
+    /// being used (with the program-signed vault PDA) to drain
+    /// beyond the user's pro-rata claim. Bound is checked post-CPI
+    /// on each vault's input-side delta.
+    ExcessVaultDrain = 9036,
 }
 
 impl From<VaultError> for ProgramError {

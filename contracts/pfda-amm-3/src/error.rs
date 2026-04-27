@@ -40,7 +40,10 @@ pub enum Pfda3Error {
     BidExcessive = 8031,
     /// WithdrawFees requested amount exceeds tracked reserves (#33)
     FeeWithdrawExceedsReserves = 8032,
-    /// InitializePool base_fee_bps ≥ 10_000 (#33)
+    /// InitializePool `base_fee_bps` exceeds `constants::MAX_BASE_FEE_BPS`
+    /// (currently 100 bps). Originally introduced for `>= 10_000` (#33);
+    /// pre-mainnet hardening tightened the cap to 100 bps to match the
+    /// upper Uniswap V3 fee tier.
     InvalidFeeBps = 8033,
     /// PDA substitution: passed-in account does not match the PDA
     /// derived from the declared seeds (#33 claim history/ticket)

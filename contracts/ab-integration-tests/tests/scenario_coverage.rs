@@ -450,8 +450,8 @@ fn pfda3_init_ix_bogus(
     data.extend_from_slice(&333_333u32.to_le_bytes());
     data.extend_from_slice(&333_334u32.to_le_bytes());
 
-    // 12-account minimum. base_fee_bps=10_000 rejection fires before
-    // any account is read, so unique fresh keys are enough.
+    // 12-account minimum. The base_fee_bps validation rejection fires
+    // before any account is read, so unique fresh keys are enough.
     let mut accts = vec![
         AccountMeta::new(payer.pubkey(), true),
         AccountMeta::new(pool, false),
@@ -484,6 +484,30 @@ fn pfda3_init_rejects_fee_100_percent() {
     .err()
     .expect("base_fee_bps=10_000 should reject");
     assert_custom_err(&err, ERR_INVALID_FEE_BPS, "pfda3 fee=100%");
+}
+
+#[test]
+fn pfda3_init_rejects_fee_above_max_cap() {
+    // pre-mainnet hardening: tighten the init-time fee cap from
+    // `>= 10_000` to `> MAX_BASE_FEE_BPS` (= 100 bps, Uniswap V3 top
+    // tier). One bp above the cap must reject so the whitepaper claim
+    // "f bounded by 100 bps at initialization" has a test backing it.
+    require_fixture!(PFDA_AMM_3_SO);
+    let mut svm = LiteSVM::new();
+    if !std::path::Path::new(PFDA_AMM_3_SO).exists() { return; }
+    svm.add_program_from_file(pfda3_id(), PFDA_AMM_3_SO).unwrap();
+    let payer = Keypair::new();
+    svm.airdrop(&payer.pubkey(), LAMPORTS_PER_SOL).unwrap();
+
+    let bogus_pool = Address::new_unique();
+    let err = send(
+        &mut svm,
+        pfda3_init_ix_bogus(&payer, 101, bogus_pool),
+        &payer,
+    )
+    .err()
+    .expect("base_fee_bps=101 should reject (cap is 100)");
+    assert_custom_err(&err, ERR_INVALID_FEE_BPS, "pfda3 fee one above cap");
 }
 
 #[test]

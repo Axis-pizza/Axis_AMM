@@ -15,6 +15,11 @@ Cargo.lock          # uncomment to track lockfile for applications
 # proved too flaky for a hard CI dependency). Refresh via
 # scripts/ops/refresh-jupiter-fixture.sh on Jupiter V6 upgrades.
 !contracts/axis-g3m/fixtures/jupiter_v6.so
+# Exception: minimal mock Jupiter program used by axis-vault WithdrawSol
+# bound tests. Source under contracts/ab-integration-tests/mock-jupiter,
+# rebuild via `cargo build-sbf --manifest-path
+# contracts/ab-integration-tests/mock-jupiter/Cargo.toml` and re-copy.
+!contracts/ab-integration-tests/fixtures/mock_jupiter.so
 deploy/
 
 # Test validator ledger data (can be gigabytes)

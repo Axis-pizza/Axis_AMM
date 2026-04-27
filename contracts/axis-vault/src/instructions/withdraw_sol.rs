@@ -220,10 +220,15 @@ pub fn process_withdraw_sol(
         .checked_sub(fee_amount)
         .ok_or(VaultError::Overflow)?;
 
-    // Compute per-vault swap amount = vault_balance * effective_burn / total_supply
+    // Compute per-vault swap amount = vault_balance * effective_burn / total_supply.
+    // Snapshot the same vault balance into `vault_pre_cpi` so the post-CPI
+    // bound check can verify that Jupiter consumed no more than the
+    // burn-share allows.
     let mut per_vault_amount = [0u64; 5];
+    let mut vault_pre_cpi = [0u64; 5];
     for i in 0..tc {
         let vault_balance = read_token_account_balance(&accounts[FIXED_ACCOUNTS + i])?;
+        vault_pre_cpi[i] = vault_balance;
         let amt = (vault_balance as u128)
             .checked_mul(effective_burn as u128)
             .ok_or(VaultError::Overflow)?
@@ -294,6 +299,33 @@ pub fn process_withdraw_sol(
         invoke_jupiter_leg(jupiter_program, refs, route_bytes, Some(&vault_signer))?;
 
         route_cursor += cnt;
+    }
+
+    // ─── per-leg input-side bound check ────────────────────────────
+    // Each Jupiter CPI is signed by the vault PDA, so `route_bytes`
+    // alone determines how many tokens Jupiter pulls from vault[i].
+    // Without this gate a withdrawer could burn 1 ETF lamport but
+    // craft `route_bytes.inAmount` to drain the entire vault, with
+    // the protocol's only output-side check (`total_wsol_out >=
+    // min_sol_out`) trivially satisfied because `min_sol_out` is also
+    // attacker-supplied. We bound consumption to the burn-share.
+    //
+    // `<=` (not `==`) so legitimate Jupiter slippage / partial fills
+    // are accepted; the user simply gets less wSOL out and the
+    // aggregate slippage gate below catches anything below their
+    // own threshold.
+    for i in 0..tc {
+        if per_vault_amount[i] == 0 {
+            // Leg was skipped — no Jupiter invocation, nothing to check.
+            continue;
+        }
+        let vault_post = read_token_account_balance(&accounts[FIXED_ACCOUNTS + i])?;
+        let consumed = vault_pre_cpi[i]
+            .checked_sub(vault_post)
+            .ok_or(VaultError::Overflow)?;
+        if consumed > per_vault_amount[i] {
+            return Err(VaultError::ExcessVaultDrain.into());
+        }
     }
 
     // ─── verify wSOL accumulator + slippage gate ───────────────────

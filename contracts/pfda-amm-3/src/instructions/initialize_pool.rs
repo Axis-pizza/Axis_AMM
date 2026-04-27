@@ -9,6 +9,7 @@ use pinocchio::{
 use pinocchio_system::instructions::CreateAccount;
 use pinocchio_token::instructions::InitializeAccount3;
 
+use crate::constants::MAX_BASE_FEE_BPS;
 use crate::error::Pfda3Error;
 use crate::state::{load_mut, BatchQueue3, PoolState3};
 
@@ -42,9 +43,12 @@ pub fn process_initialize_pool_3(
         return Err(Pfda3Error::InvalidWeight.into());
     }
 
-    // #33: reject a fee ≥ 100% up-front so a misconfigured pool can
-    // never deploy. Mirrors the guard added to pfda-amm.
-    if base_fee_bps >= 10_000 {
+    // Init-time hard ceiling. pfda-amm-3 has no SetFee path, so
+    // `base_fee_bps` is fixed for the pool's life — the guard here is
+    // the only bound that ever applies. Capped at 100 bps (Uniswap V3
+    // top tier) to remove the "fee can be dialled to ~100 %" optic
+    // that the legacy `>= 10_000` guard left for auditors.
+    if base_fee_bps > MAX_BASE_FEE_BPS {
         return Err(Pfda3Error::InvalidFeeBps.into());
     }
 

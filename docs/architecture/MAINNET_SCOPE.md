@@ -33,7 +33,7 @@ Everything else in this repo (`axis-g3m`, `pfda-amm`, `solana-tfmm-rs`, A/B harn
 
 | Disc | Name | Authority required | Purpose |
 |---|---|---|---|
-| 0 | `InitializePool` | Pool creator | One-time pool setup with 3 mints, weights, fee, window |
+| 0 | `InitializePool` | Pool creator | One-time pool setup with 3 mints, weights, fee, window. `base_fee_bps` capped at `MAX_BASE_FEE_BPS = 100` (1.0 %, Uniswap V3 top tier) and immutable post-init |
 | 1 | `SwapRequest` | User (signer) | Add a swap intent to the current batch queue |
 | 2 | `ClearBatch` | Cranker (signer) | Settle the batch; pays bid to treasury, computes clearing prices |
 | 3 | `Claim` | User (signer) | Withdraw the user's pro-rata share of the cleared batch |
@@ -218,7 +218,7 @@ The program author trusts:
 The program author DOES NOT trust:
 - Any other program ID passed in as a CPI target — verified by exact-match before invoke
 - Any account passed in as writable — verified to be SPL Token-owned, key-matching expected vault, before any data read
-- Pool authority — limited to fee/cap/pause adjustments within bounds (`MAX_FEE_BPS_CEILING = 300`, monotonic cap)
+- Pool authority — limited to fee/cap/pause adjustments within bounds (axis-vault `MAX_FEE_BPS_CEILING = 300`, monotonic cap; pfda-amm-3 has no fee-update path — `base_fee_bps` fixed at init under `MAX_BASE_FEE_BPS = 100`)
 - Treasury keypair — limited to sweep operation; no slippage exposure
 - User submitted instruction data — bounds-checked, integer overflow-checked
 

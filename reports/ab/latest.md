@@ -1,6 +1,6 @@
 # Axis A/B Test Report
 
-- Generated: 1777305364s-since-epoch
+- Generated: 1777308491s-since-epoch
 - Environment: LiteSVM (local, multi-scenario)
 
 ## Scenario 1: Small pool, tiny swap
@@ -13,10 +13,10 @@ Reserve: 1000000, Swap: 10000, Drift trigger: 200000
 | Metric | ETF A (PFDA-3) | ETF B (G3M) |
 |--------|---------------:|------------:|
 | Init CU | 0 | 14247 |
-| Swap/Request CU | 6276 | 11148 |
+| Swap/Request CU | 10776 | 11148 |
 | Clear/Rebalance CU | 10332 | 8837 |
-| Claim CU | 6161 | N/A |
-| **Total CU** | **22769** | **35400** |
+| Claim CU | 10661 | N/A |
+| **Total CU** | **31769** | **35400** |
 | Tokens received | 9970 | 9803 |
 | Execution slots | 11 | 1 |
 
@@ -46,11 +46,11 @@ Reserve: 1000000000, Swap: 5000000, Drift trigger: 200000000
 
 | Metric | ETF A (PFDA-3) | ETF B (G3M) |
 |--------|---------------:|------------:|
-| Init CU | 0 | 11253 |
+| Init CU | 0 | 12753 |
 | Swap/Request CU | 10776 | 11135 |
 | Clear/Rebalance CU | 14833 | 8830 |
 | Claim CU | 7661 | N/A |
-| **Total CU** | **33270** | **32386** |
+| **Total CU** | **33270** | **33886** |
 | Tokens received | 4985000 | 4925619 |
 | Execution slots | 11 | 1 |
 
@@ -63,15 +63,15 @@ Reserve: 1000000000, Swap: 10000000, Drift trigger: 200000000
 
 | Metric | ETF A (PFDA-3) | ETF B (G3M) |
 |--------|---------------:|------------:|
-| Init CU | 0 | 15753 |
+| Init CU | 0 | 12753 |
 | Swap/Request CU | 10776 | 11146 |
 | Clear/Rebalance CU | 14835 | 8831 |
 | Claim CU | 7661 | N/A |
-| **Total CU** | **33272** | **36898** |
+| **Total CU** | **33272** | **33898** |
 | Tokens received | 9970000 | 9802951 |
 | Execution slots | 11 | 1 |
 
 ## Summary
 
-- Average total CU: ETF A = 32520, ETF B = 35018
-- CU efficiency: ETF B uses 108% of ETF A's compute
+- Average total CU: ETF A = 34770, ETF B = 34643
+- CU efficiency: ETF B uses 100% of ETF A's compute

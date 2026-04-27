@@ -38,7 +38,7 @@ import * as os from "os";
 
 // ─── 設定 ──────────────────────────────────────────────────────────────────
 
-const PROGRAM_ID = new PublicKey("5BKDTDQdX7vFdDooVXZeKicu7S3yX2JY5e3rmASib5pY");
+const PROGRAM_ID = new PublicKey(process.env.PROGRAM_ID ?? "5BKDTDQdX7vFdDooVXZeKicu7S3yX2JY5e3rmASib5pY");
 const RPC_URL    = "http://localhost:8899";
 
 // バッチウィンドウ: 10スロット (≒ 4秒) — SwapRequest が余裕で入る長さ

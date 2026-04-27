@@ -31,8 +31,12 @@ import { ensureDevnetWalletFunded, formatSol } from "./devnet-wallet";
 
 // ─── Config ──────────────────────────────────────────────────────────────
 
-const PFDA3_PROGRAM_ID = new PublicKey("DbAPmgkrpCCZrpBMv5x1ye6nJUreqY313SuQjZsMyjEf");
-const G3M_PROGRAM_ID = new PublicKey("65aE9QdVz5bapV19BGt5cyTgVitYpekGwusRoQEovNUi");
+const PFDA3_PROGRAM_ID = new PublicKey(
+  process.env.PFDA_AMM_3_PROGRAM_ID ?? "DbAPmgkrpCCZrpBMv5x1ye6nJUreqY313SuQjZsMyjEf",
+);
+const G3M_PROGRAM_ID = new PublicKey(
+  process.env.AXIS_G3M_PROGRAM_ID ?? "65aE9QdVz5bapV19BGt5cyTgVitYpekGwusRoQEovNUi",
+);
 const RPC_URL = "https://api.devnet.solana.com";
 const SWITCHBOARD_FEED = new PublicKey("BV9mGAy5MJLYWJT5HF74izYKjF9CmL4BqkswfTu9gW2w");
 

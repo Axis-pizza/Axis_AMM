@@ -366,6 +366,72 @@ fn swap_request_rejects_when_paused() {
     assert_custom_err(&err, ERR_POOL_PAUSED, "paused-pool rejection");
 }
 
+/// ClearBatch on a paused pool must reject with PoolPaused. This closes
+/// a race that the multi-agent review flagged: SetPaused can fire while
+/// a batch window is already ended (between cranker submission and tx
+/// inclusion), and we want the ClearBatch to bail rather than try to
+/// clear stale state. The paused check is the FIRST gate after
+/// reentrancy in process_clear_batch_3 (clear_batch.rs:62), so any
+/// regression that moves the check below the bid-payment block (a
+/// likely refactor mistake) would be caught here — bid validation
+/// reads the queue and would corrupt CU accounting before paused fires.
+fn pfda3_clear_batch_ix(
+    program: Address,
+    cranker: Address,
+    pool: Address,
+    queue: Address,
+    history: Address,
+    new_queue: Address,
+    bid_lamports: u64,
+) -> Instruction {
+    let mut data = vec![2u8]; // disc 2 (ClearBatch)
+    data.extend_from_slice(&bid_lamports.to_le_bytes());
+    Instruction {
+        program_id: program,
+        accounts: vec![
+            AccountMeta::new(cranker, true),
+            AccountMeta::new(pool, false),
+            AccountMeta::new(queue, false),
+            AccountMeta::new(history, false),
+            AccountMeta::new(new_queue, false),
+            AccountMeta::new_readonly(system_program_id(), false),
+        ],
+        data,
+    }
+}
+
+#[test]
+fn clear_batch_rejects_when_paused() {
+    require_fixture!(PFDA_AMM_3_SO);
+    let Fixture { mut svm, payer, pool, mints: _, vaults: _, user_tokens: _ } =
+        match seed_pool(/*paused=*/ true) { Some(f) => f, None => return };
+
+    // Window-ended batch queue so the ClearBatch can get past size /
+    // discriminator validation and actually exercise the paused branch.
+    // current_window_end was seeded to slot 100; warp past it so the
+    // window-ended check (would-fire-after-paused) wouldn't trip first.
+    warp_to_slot(&mut svm, 200);
+
+    let queue = seed_batch_queue(&mut svm, pool, 0, 100);
+    let history = Address::find_program_address(
+        &[b"history3", pool.as_ref(), &0u64.to_le_bytes()],
+        &pfda3_id(),
+    ).0;
+    let new_queue = Address::find_program_address(
+        &[b"queue3", pool.as_ref(), &1u64.to_le_bytes()],
+        &pfda3_id(),
+    ).0;
+
+    let err = send(
+        &mut svm,
+        pfda3_clear_batch_ix(pfda3_id(), payer.pubkey(), pool, queue, history, new_queue, 0),
+        &payer,
+    )
+    .err()
+    .expect("ClearBatch on paused pool should reject");
+    assert_custom_err(&err, ERR_POOL_PAUSED, "ClearBatch paused-pool rejection");
+}
+
 // ─── pfda-amm-3 InitializePool rejection paths ─────────────────────────
 
 const ERR_INVALID_FEE_BPS: u32 = 8033;

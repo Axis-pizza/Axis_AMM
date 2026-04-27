@@ -185,31 +185,35 @@ fn clear_batch_inner(
 
     // --- Read oracle prices (if 3 oracle feeds provided: accounts 6, 7, 8) ---
     //
-    // #61 item 2 (C-lite per-leg fallback): the original behaviour aborted
-    // the entire batch if ANY single feed went stale, which made the pool
-    // un-clearable during routine Switchboard outages. The new behaviour:
+    // Hardened from the original C-lite per-leg fallback per the mainnet
+    // pre-launch security review: when feed accounts are supplied, ALL
+    // THREE must be fresh. Mixed staleness (e.g. feed[0] fresh, feed[1]
+    // stale) opens a sandwich window — an attacker manipulates the reserve
+    // of the stale leg in a prior tx in the same block, then wins the bid
+    // for this ClearBatch and clears at a favorable reserve-ratio price
+    // for that leg while the oracle anchor on the other leg makes the
+    // spread look legitimate. The ±5% clamp only fires when BOTH feeds
+    // for a leg pair are fresh, so it provides no protection in the
+    // mixed-staleness case.
     //
-    //   - For each feed i, capture Option<price>. Stale → None, no abort.
-    //   - When computing clearing price for leg i (i > 0):
-    //       both op[0] and op[i] fresh → apply ±5% oracle clamp
-    //       either stale → fall back to raw reserve-ratio for leg i
-    //   - All three stale AND feeds were supplied → still abort, since
-    //     there's no reference price at all and a sandwich window is
-    //     wider than we want without any oracle anchor.
+    // The cost of strict mode is that a single Switchboard hiccup blocks
+    // ClearBatch until the feed recovers. Acceptable: pool funds are
+    // not lost, just temporarily un-clearable; the authority can pause
+    // and unpause once feeds come back, or the cranker can retry without
+    // feeds (no-feed path, pure reserve-ratio, see below).
     //
     // No-feeds path (accounts.len() <= 8) is unchanged: pure reserve-ratio.
+    // Callers explicitly opting out of oracle anchoring still works for
+    // backwards compatibility with non-oracle keepers.
     let oracle_prices: [Option<u64>; 3] = if accounts.len() > 8 {
         let mut prices = [None; 3];
-        let mut any_fresh = false;
         for i in 0..3 {
             let feed = &accounts[6 + i];
-            if let Ok(p) = crate::oracle::read_switchboard_price(feed, current_slot, 100, 1) {
-                prices[i] = Some(p);
-                any_fresh = true;
-            }
-        }
-        if !any_fresh {
-            return Err(Pfda3Error::OracleStale.into());
+            // Any error (stale, owner mismatch, bad data) → reject the
+            // whole batch. No graceful degradation when feeds are
+            // supplied; ambiguity here cost the pool money.
+            let p = crate::oracle::read_switchboard_price(feed, current_slot, 100, 1)?;
+            prices[i] = Some(p);
         }
         prices
     } else {

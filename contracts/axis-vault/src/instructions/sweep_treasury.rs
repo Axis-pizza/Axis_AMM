@@ -126,10 +126,16 @@ pub fn process_sweep_treasury(
         return Err(ProgramError::NotEnoughAccountKeys);
     }
 
-    // Match vaults to stored token_vaults (same guard as Withdraw).
+    // Match vaults to stored token_vaults AND verify SPL Token ownership.
+    // vault_balance is read from data[64..72] below; without the owner
+    // check, a crafted account with the right key but different owner
+    // could feed arbitrary bytes into the proportional-payout math.
     for i in 0..tc {
         let vault = &accounts[5 + i];
         if vault.key() != &token_vaults[i] {
+            return Err(VaultError::VaultMismatch.into());
+        }
+        if vault.owner() != &TOKEN_PROGRAM_ID {
             return Err(VaultError::VaultMismatch.into());
         }
     }

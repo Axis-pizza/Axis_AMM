@@ -2398,6 +2398,35 @@ fn test_ab_pr_validation_litesvm() {
     println!("  PR validation reports written:");
     println!("    {}", latest_json);
     println!("    {}", latest_md);
+
+    // Enforced A/B gate (opt-in via env var). The gate computation always
+    // runs and is written to the report; ENFORCE_AB_GATE=true converts a
+    // failing gate into a test-suite failure. Off by default so local dev
+    // iteration on math/reporting doesn't fight CI; ON in `.github/
+    // workflows/main-report.yml` so a regression on `main` actually
+    // blocks merge instead of silently writing FAIL into a report nobody
+    // reads.
+    if std::env::var("ENFORCE_AB_GATE").as_deref() == Ok("true") {
+        let gate = report
+            .environments
+            .iter()
+            .find(|e| e.name == "LiteSVM")
+            .and_then(|e| e.gate.as_ref())
+            .expect("LiteSVM gate must be present when ENFORCE_AB_GATE=true");
+        if !gate.all_pass {
+            let failures: Vec<String> = gate
+                .checks
+                .iter()
+                .filter(|c| !c.pass)
+                .map(|c| format!("{}: {}", c.gate, c.detail))
+                .collect();
+            panic!(
+                "A/B gate FAILED ({} failed checks):\n  - {}",
+                failures.len(),
+                failures.join("\n  - ")
+            );
+        }
+    }
 }
 
 /// Run a single mainnet-fork A/B pair: G3M uses real Jupiter CPI, PFDA-3 uses synthetic tokens.

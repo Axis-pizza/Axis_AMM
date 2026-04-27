@@ -14,7 +14,7 @@ import {
 import * as fs from "fs";
 import * as os from "os";
 
-const PROGRAM_ID = new PublicKey("DbAPmgkrpCCZrpBMv5x1ye6nJUreqY313SuQjZsMyjEf");
+const PROGRAM_ID = new PublicKey(process.env.PROGRAM_ID ?? "DbAPmgkrpCCZrpBMv5x1ye6nJUreqY313SuQjZsMyjEf");
 const RPC_URL = "http://localhost:8899";
 
 function loadPayer(): Keypair {

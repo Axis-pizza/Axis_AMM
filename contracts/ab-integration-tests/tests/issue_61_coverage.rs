@@ -1,7 +1,13 @@
 //! #61 follow-up coverage:
 //!
-//!   - Item 2: pfda-amm-3 ClearBatch oracle C-lite per-leg fallback
-//!     (single-feed-stale legs degrade to reserve-ratio, all-stale aborts).
+//!   - Item 2: pfda-amm-3 ClearBatch oracle policy (HARDENED for
+//!     mainnet pre-launch — was C-lite per-leg fallback, now strict:
+//!     when feeds are supplied, all three must be fresh, otherwise
+//!     abort. The previous "single-feed-stale legs degrade to
+//!     reserve-ratio" behaviour opened a sandwich window where an
+//!     attacker manipulated the stale leg's reserve in a prior tx and
+//!     won the bid for ClearBatch). See clear_batch.rs:186-220 for
+//!     the strict-mode rationale.
 //!   - Item 4: pfda-amm dedicated `treasury` field migration. Pools
 //!     created with the v2 init format route bids to `pool.treasury`;
 //!     legacy zeroed-treasury pools fall back to `pool.authority`.
@@ -288,16 +294,20 @@ fn pfda3_set_batch_id_disc_unknown_in_mainnet_build() {
     );
 }
 
-// ─── #61 item 2 — pfda-amm-3 oracle C-lite per-leg fallback ───────────
+// ─── #61 item 2 — pfda-amm-3 oracle policy (NOW: strict-mode) ─────────
 //
-// Direct end-to-end coverage of the C-lite policy needs full ClearBatch
-// state (PoolState3 + BatchQueue3 + ClearedBatchHistory3 fabrication +
-// Switchboard feed account fabrication). The clearing-price math runs
-// regardless of which path each leg takes, so a unit test of the
-// effective_price formula in isolation would re-derive the program
-// logic. A higher-fidelity test belongs in axis_g3m_coverage.rs once
-// that file gains an oracle harness — tracked as a follow-up. The
-// behavioural change is small and well-localised; the multi-agent
-// review sign-off + the inline comments describing per-leg fallback
-// (clear_batch.rs:186-216, 232-249) provide the code-side guarantee
-// for now.
+// Hardened from C-lite per-leg fallback per the mainnet pre-launch
+// review. New rule: any stale or invalid feed in the supplied set
+// rejects the whole ClearBatch. Mid-staleness (e.g. ref fresh, leg
+// stale) is the worst case because it lets a manipulator move the
+// stale leg's reserve in a prior tx and clear at the favoured
+// reserve-ratio price while the fresh leg's oracle anchor masks the
+// spread. The ±5% clamp only fires when both feeds for a pair are
+// fresh — gave no protection in the mixed case.
+//
+// Direct end-to-end coverage in pfda3_oracle_failure.rs — fabricates
+// PoolState3 + BatchQueue3 + Switchboard feed accounts and asserts:
+//   - all-fresh: success
+//   - any-stale: OracleStale rejection (was: graceful per-leg fallback)
+//   - all-stale: OracleStale rejection (unchanged)
+//   - no feeds (accounts <= 8): success via reserve-ratio path

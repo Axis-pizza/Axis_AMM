@@ -9,7 +9,9 @@ use pinocchio::{
 use pinocchio_system::instructions::CreateAccount;
 use pinocchio_token::instructions::{InitializeAccount3, InitializeMint2};
 
-use crate::constants::{protocol_treasury_is_active, PROTOCOL_TREASURY};
+use crate::constants::{
+    protocol_treasury_is_active, DEFAULT_FEE_BPS, DEFAULT_MAX_FEE_BPS, PROTOCOL_TREASURY,
+};
 use crate::error::VaultError;
 use crate::state::{
     load_mut, EtfState, MAX_BASKET_TOKENS, MAX_ETF_NAME_LEN, MAX_ETF_TICKER_LEN,
@@ -202,9 +204,18 @@ pub fn process_create_etf(
         etf.weights_bps = wb;
         etf.total_supply = 0;
         etf.treasury = *treasury_ai.key();
-        etf.fee_bps = 30;
+        etf.fee_bps = DEFAULT_FEE_BPS;
         etf.paused = 0;
         etf.bump = pda_bump;
+        // SetFee gate: authority can change fee_bps within
+        // [0, max_fee_bps]. Hard-set at create time, not adjustable
+        // afterwards — locks the worst-case fee for this ETF.
+        etf.max_fee_bps = DEFAULT_MAX_FEE_BPS;
+        etf._pad = [0; 2];
+        // TVL cap: 0 = uncapped. Authority opts in via SetCap once a
+        // ramp curve is decided. Off by default for backwards-compat
+        // with the existing test flow.
+        etf.tvl_cap = 0;
 
         // Zero-pad name + ticker into their fixed-size slots so clients
         // can decode a deterministic blob regardless of actual length.

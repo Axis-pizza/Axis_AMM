@@ -1,6 +1,8 @@
 pub mod create_etf;
 pub mod deposit;
 pub mod deposit_sol;
+pub mod set_cap;
+pub mod set_fee;
 pub mod set_paused;
 pub mod sweep_treasury;
 pub mod withdraw;
@@ -9,6 +11,8 @@ pub mod withdraw_sol;
 pub use create_etf::process_create_etf;
 pub use deposit::process_deposit;
 pub use deposit_sol::process_deposit_sol;
+pub use set_cap::process_set_cap;
+pub use set_fee::process_set_fee;
 pub use set_paused::process_set_paused;
 pub use sweep_treasury::process_sweep_treasury;
 pub use withdraw::process_withdraw;

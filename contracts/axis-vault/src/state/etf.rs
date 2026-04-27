@@ -54,17 +54,37 @@ pub struct EtfState {
     /// Gives clients a tamper-proof creation timestamp for provenance
     /// without relying on explorer indexes.
     pub created_at_slot: u64,
-    /// Padding kept at the end so future metadata additions can slot in
-    /// without another discriminator bump (subject to reviewing field
-    /// alignment).
+    /// Maximum allowed `fee_bps`. SetFee rejects any new fee above this
+    /// ceiling. Hard-set at CreateEtf time from `MAX_FEE_BPS_CEILING`
+    /// in constants.rs. Locks the worst-case fee an authority can set,
+    /// even after a compromised authority key. Cannot be raised.
+    pub max_fee_bps: u16,
+    /// Two-byte alignment pad before tvl_cap. Reserved for future
+    /// flag bytes (e.g. compliance flag, kyc-required bit).
+    pub _pad: [u8; 2],
+    /// TVL cap: maximum `total_supply` allowed. Deposits that would
+    /// push total_supply above this revert with `TvlCapExceeded`.
+    /// Zero = no cap (uncapped). Can only be raised by the authority,
+    /// never lowered (lowering would brick deposits for any pool
+    /// currently above the lower cap, with no in-protocol path to
+    /// drain). Initialized to zero (uncapped) by CreateEtf; the
+    /// authority sets it via SetCap once they've decided the closed-
+    /// beta ramp curve.
+    pub tvl_cap: u64,
+    /// Tail padding. Future metadata additions (e.g. delegate keys,
+    /// migration markers) slot in here without another discriminator
+    /// bump as long as alignment is respected.
     pub _padding: [u8; 4],
 }
 
 impl EtfState {
-    /// Discriminator bumped from `etfstate` → `etfstat2` as part of #37.
-    /// Old v1 accounts fail `is_initialized()` and must be closed/re-created
-    /// rather than migrated in place — see the issue for rationale.
-    pub const DISCRIMINATOR: [u8; 8] = *b"etfstat2";
+    /// Discriminator bumped from `etfstat2` → `etfstat3` as part of the
+    /// pre-mainnet hardening: SetFee with `max_fee_bps` ceiling and
+    /// SetCap with `tvl_cap`. Old v2 accounts fail `is_initialized()`
+    /// and must be closed/re-created rather than migrated in place —
+    /// devnet pools created before this bump are pre-launch and
+    /// expected to be discarded.
+    pub const DISCRIMINATOR: [u8; 8] = *b"etfstat3";
     pub const LEN: usize = core::mem::size_of::<EtfState>();
 
     pub fn is_initialized(&self) -> bool {

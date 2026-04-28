@@ -109,11 +109,11 @@ function main() {
   console.log(`  ✓ updated ${path.relative(repoRoot, CONSTANTS_PATH)}`);
   console.log();
   console.log("Next steps (must do, in order):");
-  console.log("  1. Update contracts/axis-vault/src/lib.rs declare_id! to the");
-  console.log("     mainnet program ID (was a placeholder).");
-  console.log("  2. cargo build-sbf --manifest-path contracts/axis-vault/Cargo.toml");
+  console.log("  1. Confirm the final mainnet axis-vault program keypair/ID.");
+  console.log("     Pinocchio programs do not use Anchor-style declare_id!().");
+  console.log("  2. cargo build-sbf --manifest-path contracts/axis-vault/Cargo.toml --sbf-out-dir contracts/axis-vault/target/deploy");
   console.log("  3. Verify the .so size hasn't drifted: `ls -la contracts/axis-vault/target/deploy/axis_vault.so`");
-  console.log("  4. Muse deploys via Squads (the deploy itself is a Squads tx).");
+  console.log("  4. Deploy/upgrade as an upgradeable program, then hand authority to Squads.");
   console.log("  5. Verify on-chain:");
   console.log(`       solana account <axis_vault_program_id> --output json | jq .`);
   console.log(`       # then a CreateEtf tx that exercises the gate — must succeed`);

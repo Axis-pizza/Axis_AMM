@@ -13,59 +13,33 @@ neither can delegate.
 
 ## Order of operations
 
-Strict order, no skipping. Steps 4–6 are committed code; everything
-above and including step 3 is pure ops.
+Strict order, no skipping. Steps 2–4 are committed code; step 1 is
+pure ops. The mainnet Squads vault has already been provisioned, so
+this runbook starts at vault-address verification.
 
-### 1. Devnet vault
+### 1. Mainnet vault
 
-- Both signers go to https://app.squads.so → Create new vault
-- Network: **Devnet**
-- Threshold: **2 of 2**
-- Members: muse0509's wallet + kidneyweakx's wallet
-- Save the **devnet vault address** (call it `DEVNET_VAULT`)
+Created via Squads UI (https://app.squads.so) with **Network: Mainnet
+Beta**, **Threshold: 2 of 2**, members = muse0509's wallet +
+kidneyweakx's wallet.
 
-### 2. Devnet end-to-end smoke
-
-Run a full lifecycle against the devnet vault BEFORE provisioning
-mainnet — ensures the on-chain gate behaves with a real Squads vault.
-
-```bash
-# Use the dev branch with the constant flipped to DEVNET_VAULT
-git checkout -b devnet/treasury-smoke
-bun scripts/ops/flip-protocol-treasury.ts <DEVNET_VAULT>
-cargo build-sbf --manifest-path contracts/axis-vault/Cargo.toml
-
-# Deploy via Squads tx (UI: "Deploy Program" or via squads-mpl CLI)
-# Then run the e2e:
-RPC_URL=https://api.devnet.solana.com bun test/e2e/axis-vault/axis-vault.devnet.e2e.ts
-```
-
-Expected:
-- `CreateEtf` succeeds when `etf.treasury == DEVNET_VAULT`
-- `CreateEtf` rejects with `TreasuryNotApproved` for any other `treasury` field
-
-If anything fails: roll back the branch, fix code, redo from step 1.
-Don't move on with a half-working gate.
-
-### 3. Mainnet vault
-
-Same Squads UI flow as step 1, but with **Network: Mainnet Beta**.
-
-- Save the **mainnet vault address** (`MAINNET_VAULT`)
-- Both signers must verify the address out-of-band (Slack DM, etc.)
+- `MAINNET_VAULT` = `BtjuCMkLC9MuzagvGSS9E26XjMNTBR6isj8e1xVyeak6`
+  (Squads V4 vault PDA, `vault_index = 0`, shown in Receive Assets →
+  Account 1)
+- Both signers must verify this address out-of-band (Slack DM, etc.)
   before anyone signs a deploy against it
 
-### 4. Code: flip the constant
+### 2. Code: flip the constant
 
 Single commit on a branch off `main`:
 
 ```bash
 git checkout -b ops/issue-38-protocol-treasury-flip
 bun scripts/ops/flip-protocol-treasury.ts <MAINNET_VAULT>
-# Also update contracts/axis-vault/src/lib.rs declare_id!() to the
-# mainnet axis-vault program ID. The script prints a reminder.
-cargo build-sbf --manifest-path contracts/axis-vault/Cargo.toml
-git add contracts/axis-vault/src/constants.rs contracts/axis-vault/src/lib.rs
+cargo build-sbf \
+  --manifest-path contracts/axis-vault/Cargo.toml \
+  --sbf-out-dir contracts/axis-vault/target/deploy
+git add contracts/axis-vault/src/constants.rs
 git commit -m "ops(#38): flip PROTOCOL_TREASURY to mainnet Squads vault"
 git push
 ```
@@ -74,36 +48,40 @@ PR review must include both signers. The diff is small; the
 verification is making sure the 32 bytes match the Squads vault
 address character-for-character.
 
-### 5. Deploy
+Note: `axis-vault` is a Pinocchio program and does not use
+Anchor-style `declare_id!()`. The mainnet program ID is controlled by
+the deploy keypair passed to `solana program deploy --program-id`.
+
+### 3. Deploy
 
 Muse executes the deploy as a Squads tx (axis-vault program upgrade).
 This requires the multisig to sign — kidneyweakx approves the tx in
 the Squads UI.
 
-### 6. Verify on-chain
+### 4. Verify on-chain
 
 ```bash
-# 6a: program upgrade succeeded
+# 4a: program upgrade succeeded
 solana program show <AXIS_VAULT_PROGRAM_ID> -u mainnet-beta
 
-# 6b: gate is now live — try a CreateEtf with the wrong treasury,
+# 4b: gate is now live — try a CreateEtf with the wrong treasury,
 # expect TreasuryNotApproved
 bun scripts/axis-vault/demo.ts --treasury <SOME_OTHER_KEY>
 # expect: failed with custom error 9023
 
-# 6c: try with the right treasury, expect success
+# 4c: try with the right treasury, expect success
 bun scripts/axis-vault/demo.ts --treasury <MAINNET_VAULT>
 # expect: ETF created, deposit/withdraw round-trip clean
 ```
 
-### 7. Close #59 + related #61 items
+### 5. Close #59 + related #61 items
 
-Once 6c is green, mark issue #59 closed and item #3 in #61 done. The
+Once 4c is green, mark issue #59 closed and item #3 in #61 done. The
 treasury gate is now permanently active for every CreateEtf.
 
 ## Rollback
 
-If step 6c fails:
+If step 4c fails:
 - Do NOT flip the constant back to zero — that re-opens the silent
   bypass. Instead deploy a hotfix that uses the OLD vault address (if
   this is a rotation) or pause the program via `SetPaused` while the

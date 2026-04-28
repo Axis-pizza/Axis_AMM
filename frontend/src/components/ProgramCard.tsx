@@ -14,7 +14,13 @@ interface ChainState {
 /// AccountInfo + ProgramData (BPFLoaderUpgradeable layout) so we can
 /// surface the live upgrade authority — the most common "is this the
 /// right deploy?" question.
-export function ProgramCard({ program }: { program: ProgramRef }) {
+export function ProgramCard({
+  program,
+  explorerCluster,
+}: {
+  program: ProgramRef;
+  explorerCluster: "devnet" | "";
+}) {
   const { connection } = useConnection();
   const [state, setState] = useState<ChainState>({ status: "loading" });
 
@@ -116,7 +122,7 @@ export function ProgramCard({ program }: { program: ProgramRef }) {
       </dl>
 
       <a
-        href={`https://explorer.solana.com/address/${program.address.toBase58()}?cluster=devnet`}
+        href={`https://explorer.solana.com/address/${program.address.toBase58()}${explorerCluster ? `?cluster=${explorerCluster}` : ""}`}
         target="_blank"
         rel="noopener noreferrer"
         className="mt-4 inline-block text-xs text-indigo-400 hover:text-indigo-300"

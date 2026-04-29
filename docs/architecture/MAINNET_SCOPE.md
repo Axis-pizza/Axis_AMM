@@ -2,7 +2,7 @@
 
 This document defines what ships to mainnet for v1, what is explicitly out of scope, and what the audit boundary is. Audit firms should bid against this document; the rest of the repo is research and ops scaffolding.
 
-Last updated: 2026-04-30
+Last updated: 2026-04-30 (post pfda-amm-3 verifiable deploy)
 
 ---
 
@@ -12,7 +12,7 @@ Mainnet v1 ships **two Solana programs**:
 
 | Program | Mainnet status | Mainnet ID | Lines of code (approx) | Audit priority |
 |---|---|---|---|---|
-| `pfda-amm-3` | pre-deploy | (TBD; devnet `3SBbfZgzAHyaijxbUbxBLt89aX6Z2d4ptL5PH6pzMazV`) | ~2,400 | P0 |
+| `pfda-amm-3` | **live, OtterSec-verified** (2026-04-29) | `3SBbfZgzAHyaijxbUbxBLt89aX6Z2d4ptL5PH6pzMazV` | ~2,400 | P0 |
 | `axis-vault` | **live, OtterSec-verified** (2026-04-29) | `Agae3WetHx7J9CE7nP927ekzAeegSKE1KfkZDMYLDGHX` | ~2,100 | P0 |
 
 Built with [Pinocchio](https://github.com/anza-xyz/pinocchio), `no_std`, no Anchor.
@@ -117,9 +117,9 @@ The Python/Rust simulation harness that generates the LVR P&L tables in `README.
 
 **Status (2026-04-29).** Shipped. `contracts/axis-vault/src/constants.rs:73-78` now holds the Squads V4 vault key `BtjuCMkLC9MuzagvGSS9E26XjMNTBR6isj8e1xVyeak6`; `protocol_treasury_is_active()` returns true; `CreateEtf` enforces `treasury == PROTOCOL_TREASURY` per `instructions/create_etf.rs:103-110`. Verified by `bun test/frontend/programs.test.ts` (canonical-treasury assertions) and by the on-chain `axis-vault` upgrade landed at slot 416463163 (deploy sig `2TBxw…vsMHBY` for the original deploy; redeployed under the same Squads vault as part of the verifiable-build flow — see "Deployment artifacts" below).
 
-### ~~D3. Upgrade-authority handoff to Squads multisig~~ — DONE 2026-04-29
+### ~~D3. Upgrade-authority handoff to Squads multisig~~ — DONE 2026-04-30
 
-**Status (2026-04-29).** Shipped. Mainnet upgrade authority for `axis-vault` (`Agae3Wet…YLDGHX`) is the Squads V4 vault `BtjuCMkLC9MuzagvGSS9E26XjMNTBR6isj8e1xVyeak6`; verified via `solana program show … -u mainnet-beta`. `pfda-amm-3` is still pre-deploy on mainnet — its handoff stays nominally deferred until the first mainnet deploy lands, at which point the same Squads vault adopts upgrade authority.
+**Status.** Shipped for both programs. Mainnet upgrade authority is the Squads V4 vault `BtjuCMkLC9MuzagvGSS9E26XjMNTBR6isj8e1xVyeak6` for `axis-vault` (since 2026-04-29) and `pfda-amm-3` (since 2026-04-30, immediately after the initial deploy via `set-upgrade-authority --skip-new-upgrade-authority-signer-check`). Verified via `solana program show … -u mainnet-beta` for both.
 
 ### D4. 24–72h upgrade timelock
 
@@ -253,26 +253,35 @@ Audit firm + link:    [TBD — booked before TVL > $100k per R1]
 ─────────────────────────────────────────────────────────────
 ```
 
-### `pfda-amm-3` — pre-deploy
+### `pfda-amm-3` — live on mainnet-beta
 
 ```
 ─── Mainnet deploy (pfda-amm-3) ─────────────────────────────
-Status:               not yet deployed to mainnet-beta
-                      (devnet ID 3SBbfZgzAHyaijxbUbxBLt89aX6Z2d4ptL5PH6pzMazV
-                       per `frontend/src/lib/programs.ts`).
-Pre-deploy checklist:
-  1. Build with `solana-verify build --base-image
-     solanafoundation/solana-verifiable-build:3.0.14
-     contracts/pfda-amm-3` so the deploy hash matches what
-     OtterSec will rebuild later.
-  2. `solana program write-buffer` from a deploy keypair, then
-     `set-buffer-authority` to the Squads vault.
-  3. Squads multisig (2-of-2) executes deploy with the buffer.
-  4. Run `scripts/ops/verify-build.sh PROGRAM_ID=<new-id>`
-     and confirm PASS.
-  5. `solana-verify export-pda-tx` → Squads Custom TX → 2-of-2
-     execute → `solana-verify remote submit-job`. Reflect in
-     this doc + `idl/pfda_amm_3.json`.
+Initial deploy:       2026-04-30 (slot 416476977,
+                      sig 3q2cXvPVskHfWRyEHoF8YZXoodm9Y3Kxwd2HWEU4ys1qCMovAF4NjH6uxYjEmGnzyFUtct8XourUaFqUqHs87fh3)
+Build path:           `solana-verify build --base-image
+                      solanafoundation/solana-verifiable-build:3.0.14
+                      contracts/pfda-amm-3` first; the docker hash
+                      matched the on-chain hash on the first try
+                      (no redeploy needed, unlike axis-vault).
+Deploying wallet:     6pZuwgM4ZyzWjtjMSGap5Zw4GCUo3q7RxFPsFxSLao5o
+                      (single-sig prep only; upgrade authority
+                      handed to Squads vault immediately after deploy)
+Audit firm + link:    [TBD — booked before TVL > $100k per R1]
+
+  Program ID:                3SBbfZgzAHyaijxbUbxBLt89aX6Z2d4ptL5PH6pzMazV
+  ProgramData PDA:           Hy46nZWmSzFjyDcQvVdF51RiiT4EcTjBo85t5SKZj6ax
+  Upgrade authority:         BtjuCMkLC9MuzagvGSS9E26XjMNTBR6isj8e1xVyeak6  (Squads V4 vault, 2-of-2)
+  .so size:                  68,744 bytes
+  .so raw SHA-256:           0d73e873b5a01b95d219520e967ff4837e9202aa4210ab7d77bad00ae596282e
+  solana-verify hash:        b75828371550e3fa7e9955cb6edac4c53a10c0dab6ec0d0ab4ee44150263fa98
+  OtterSec verifier:         is_verified: true (job f52b115f-bd3f-4703-a044-f8601b3c3a8f)
+  OtterSec status URL:       https://verify.osec.io/status/3SBbfZgzAHyaijxbUbxBLt89aX6Z2d4ptL5PH6pzMazV
+  Verify-PDA:                BbhvCmpxtTsfJWySJPBRSaxGV7ap3wNgLJ3s5MVnaLhd
+  Source repo + commit:      https://github.com/Axis-pizza/Axis_AMM @ af3c2296e47b205dba8d437ebe89c371902a6544
+  Out-of-pocket cost:        ~0.4812 SOL (programData rent locked +
+                             ~0.001 program-account rent + tx fees;
+                             rent rebatable only via `solana program close`)
 ─────────────────────────────────────────────────────────────
 ```
 

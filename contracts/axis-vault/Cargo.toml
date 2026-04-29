@@ -13,3 +13,10 @@ pinocchio-token = "0.4"
 
 [features]
 no-entrypoint = []
+# Local-validator E2E only: zeroes PROTOCOL_TREASURY so the CreateEtf
+# governance gate stays inert and the test suite can use a throwaway
+# treasury keypair that signs SweepTreasury. NEVER enabled for the
+# verifiable mainnet build (`solana-verify build` invokes
+# `cargo build-sbf` without `--features`, so the real Squads key in
+# `src/constants.rs` is what ships).
+e2e-disable-treasury-gate = []

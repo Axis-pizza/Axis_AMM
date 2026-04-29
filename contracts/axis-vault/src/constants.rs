@@ -70,12 +70,21 @@ pub const DEFAULT_MAX_FEE_BPS: u16 = MAX_FEE_BPS_CEILING;
 ///
 /// TODO(ops #38): replace zeros with the deployed Squads V4 vault key
 /// once provisioned on devnet → mainnet.
+#[cfg(not(feature = "e2e-disable-treasury-gate"))]
 pub const PROTOCOL_TREASURY: [u8; 32] = [
     0xa1, 0xd5, 0xff, 0x64, 0xa6, 0x8a, 0x6f, 0x41,
     0xb9, 0xce, 0x8c, 0x9b, 0x4c, 0x4e, 0x50, 0x49,
     0x42, 0x69, 0xaa, 0xd0, 0x81, 0x7a, 0x10, 0xf3,
     0x6c, 0x2b, 0x96, 0x4c, 0x37, 0xd9, 0xd6, 0xef,
 ];
+
+/// Local-validator E2E override: keeps the gate inert so tests can
+/// CreateEtf with a throwaway treasury keypair (needed because
+/// `SweepTreasury` requires the stored treasury to sign, and we
+/// can't sign for the Squads multisig in CI). The verifiable
+/// Docker build never enables this feature.
+#[cfg(feature = "e2e-disable-treasury-gate")]
+pub const PROTOCOL_TREASURY: [u8; 32] = [0u8; 32];
 
 /// Returns true when `PROTOCOL_TREASURY` has been set to a real address
 /// (i.e. the Squads V4 multisig is deployed and the constant above has

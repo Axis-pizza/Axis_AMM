@@ -7,8 +7,16 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/_common.sh"
 ensure_solana_path
 
 for manifest in "${SBF_LOCAL_E2E_MANIFESTS[@]}"; do
-  echo "==> cargo build-sbf (${manifest})"
-  cargo build-sbf --manifest-path "${manifest}"
+  # axis-vault: enable the local-only feature that zeroes PROTOCOL_TREASURY
+  # so the CreateEtf gate stays inert. The verifiable mainnet build never
+  # runs this script, so the real Squads vault key still ships to mainnet.
+  if [[ "${manifest}" == "contracts/axis-vault/Cargo.toml" ]]; then
+    echo "==> cargo build-sbf (${manifest}) [features: e2e-disable-treasury-gate]"
+    cargo build-sbf --manifest-path "${manifest}" --features e2e-disable-treasury-gate
+  else
+    echo "==> cargo build-sbf (${manifest})"
+    cargo build-sbf --manifest-path "${manifest}"
+  fi
 done
 
 mkdir -p "${HOME}/.config/solana"

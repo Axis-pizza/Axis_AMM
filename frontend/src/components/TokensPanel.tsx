@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback } from "react";
+import { LAMPORTS_PER_SOL } from "@solana/web3.js";
 import { useConnection, useWallet } from "@solana/wallet-adapter-react";
 import { type WalletToken, fetchWalletTokens } from "../lib/tokens";
 import { buildCreateMintWithSupplyIxs } from "../lib/spl";
@@ -6,13 +7,17 @@ import { sendTx, explorerAddr, explorerTx } from "../lib/tx";
 import { truncatePubkey } from "../lib/format";
 import type { ClusterConfig } from "../lib/programs";
 
+// Canonical mainnet mints. Resolved against `lite-api.jup.ag/tokens/v2`
+// and verified tradable via `swap/v1/quote` so Jupiter SOL-in seed
+// previews don't 400 with TOKEN_NOT_TRADABLE. Earlier values had typos
+// in the suffix and were silently invalid.
 const MAINNET_PRESETS = [
   { symbol: "USDC", mint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v" },
-  { symbol: "USDT", mint: "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY8wYb6Fq4jmWZtj" },
+  { symbol: "USDT", mint: "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB" },
   { symbol: "JitoSOL", mint: "J1toso1uCk3RLmjorhTtrVwY9HJ7X8V9yYac6Y7kGCPn" },
-  { symbol: "mSOL", mint: "mSoLzYCxHdedyZ9E3uXvJxiftf7KqJQkU1XQv6r2fE7" },
-  { symbol: "BONK", mint: "DezXAZ8z7PnrnRJjz3B97eywMR4vXv1Yu2fB263wXF5B" },
-  { symbol: "WIF", mint: "EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzL2jH2Bzv4b5" },
+  { symbol: "mSOL", mint: "mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So" },
+  { symbol: "BONK", mint: "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263" },
+  { symbol: "WIF", mint: "EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm" },
 ] as const;
 
 /// Token-list panel. Two jobs:
@@ -42,8 +47,12 @@ export function TokensPanel({
   const [mintingState, setMintingState] = useState<"idle" | "pending" | "ok" | "err">(
     "idle",
   );
+  const [airdropping, setAirdropping] = useState(false);
   const [mintMsg, setMintMsg] = useState<string>("");
-  const [mintSig, setMintSig] = useState<string>("");
+  const [lastTx, setLastTx] = useState<{
+    sig: string;
+    label: string;
+  } | null>(null);
   const [manualMint, setManualMint] = useState("");
   const [decimals, setDecimals] = useState(6);
   const [supply, setSupply] = useState(100_000); // ui-amount, multiplied by 10^decimals on send
@@ -72,7 +81,7 @@ export function TokensPanel({
     if (!publicKey) return;
     setMintingState("pending");
     setMintMsg("");
-    setMintSig("");
+    setLastTx(null);
     try {
       const initial = BigInt(Math.floor(supply)) * BigInt(10 ** decimals);
       const bundle = await buildCreateMintWithSupplyIxs(
@@ -83,7 +92,7 @@ export function TokensPanel({
       );
       const sig = await sendTx(connection, wallet, bundle.ixs, bundle.signers);
       setMintingState("ok");
-      setMintSig(sig);
+      setLastTx({ sig, label: "mint" });
       setMintMsg(
         `${truncatePubkey(bundle.mint.toBase58())} · ${sig.slice(0, 10)}…`,
       );
@@ -92,6 +101,32 @@ export function TokensPanel({
     } catch (e) {
       setMintingState("err");
       setMintMsg(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  async function requestDevnetSol() {
+    if (!publicKey) return;
+    setAirdropping(true);
+    setMintingState("idle");
+    setMintMsg("");
+    setLastTx(null);
+    try {
+      const sig = await connection.requestAirdrop(publicKey, 2 * LAMPORTS_PER_SOL);
+      const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash(
+        "confirmed",
+      );
+      await connection.confirmTransaction(
+        { signature: sig, blockhash, lastValidBlockHeight },
+        "confirmed",
+      );
+      setMintingState("ok");
+      setLastTx({ sig, label: "airdrop" });
+      setMintMsg(`Airdropped 2 devnet SOL · ${sig.slice(0, 10)}…`);
+    } catch (e) {
+      setMintingState("err");
+      setMintMsg(e instanceof Error ? e.message : String(e));
+    } finally {
+      setAirdropping(false);
     }
   }
 
@@ -141,10 +176,17 @@ export function TokensPanel({
               </label>
               <button
                 onClick={mintTestToken}
-                disabled={mintingState === "pending"}
+                disabled={mintingState === "pending" || airdropping}
                 className="rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-indigo-500 disabled:opacity-50"
               >
                 {mintingState === "pending" ? "minting…" : "Mint"}
+              </button>
+              <button
+                onClick={requestDevnetSol}
+                disabled={mintingState === "pending" || airdropping}
+                className="rounded-lg border border-slate-700 px-3 py-1.5 text-xs font-medium text-slate-200 hover:border-slate-500 disabled:opacity-50"
+              >
+                {airdropping ? "airdropping…" : "Airdrop 2 SOL"}
               </button>
             </div>
             ) : (
@@ -258,11 +300,11 @@ export function TokensPanel({
               })}
             </ul>
           )}
-          {mintingState === "ok" && mintSig && (
+          {mintingState === "ok" && lastTx && (
             <p className="mt-3 text-xs text-slate-500">
-              See last mint tx on{" "}
+              See last {lastTx.label} tx on{" "}
               <a
-                href={explorerTx(mintSig, explorerCluster)}
+                href={explorerTx(lastTx.sig, explorerCluster)}
                 target="_blank"
                 rel="noreferrer"
                 className="underline hover:text-slate-300"

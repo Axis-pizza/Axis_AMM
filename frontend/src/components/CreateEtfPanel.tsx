@@ -14,6 +14,7 @@ import { sendTx, sendVersionedTx, explorerTx } from "../lib/tx";
 import type { ClusterConfig } from "../lib/programs";
 import { buildDepositSolPlan } from "../lib/depositSolPlan";
 import { truncatePubkey } from "../lib/format";
+import { JupiterSeedPreviewCard } from "./JupiterSeedPreviewCard";
 
 interface BasketRow {
   mint: string; // base58
@@ -50,7 +51,10 @@ export function CreateEtfPanel({
   // test. The program rejects amount < MIN_FIRST_DEPOSIT (1_000_000)
   // with InsufficientFirstDeposit (0x233A / 9018) on the first deposit.
   const [depositBase, setDepositBase] = useState<number>(1_000_000_000);
-  const [solSeed, setSolSeed] = useState<number>(0.01);
+  // 0.02 SOL clears the on-chain MIN_FIRST_DEPOSIT (1.0 ETF base) for
+  // typical mainnet routes at SOL ≈ $80-150. Smaller seeds will be
+  // refused by `buildDepositSolPlan` with a recommended bump.
+  const [solSeed, setSolSeed] = useState<number>(0.02);
   const [slippageBps, setSlippageBps] = useState<number>(50);
   const [doDepositAfter, setDoDepositAfter] = useState(true);
   const [stage, setStage] = useState<"idle" | "alloc" | "create" | "deposit" | "ok" | "err">(
@@ -169,12 +173,41 @@ export function CreateEtfPanel({
             slippageBps,
           });
           pushLog(
-            `Tx2: Jupiter SOL-in seed (${solSeed} SOL) + Deposit; ix=${plan.ixCount}`,
+            `Tx2: Jupiter SOL-in seed (${solSeed} SOL) + Deposit; mode=${plan.mode}; ix=${plan.ixCount}; tx=${plan.txBytes}b`,
           );
-          const sig3 = await sendVersionedTx(connection, wallet, plan.versionedTx);
-          pushLog(`✓ jupiter_seed_deposit: ${sig3.slice(0, 12)}…`);
-          pushLog(`Deposit base floor: ${plan.depositAmount.toString()}`);
-          pushLog(`See: ${explorerTx(sig3, config.explorerCluster)}`);
+          const bottleneck = plan.seedPreview.legs[plan.seedPreview.bottleneckIndex];
+          pushLog(
+            `Jupiter floor: ${plan.depositAmount.toString()} base; bottleneck=${truncatePubkey(
+              bottleneck.mint.toBase58(),
+              6,
+              6,
+            )}`,
+          );
+          pushLog(
+            `Expected out: ${plan.seedPreview.legs
+              .map((leg) => `${truncatePubkey(leg.mint.toBase58(), 4, 4)}=${leg.expectedOut}`)
+              .join(" / ")}`,
+          );
+          if (plan.mode === "single") {
+            const sig3 = await sendVersionedTx(connection, wallet, plan.versionedTx);
+            pushLog(`✓ jupiter_seed_deposit: ${sig3.slice(0, 12)}…`);
+            pushLog(`See: ${explorerTx(sig3, config.explorerCluster)}`);
+          } else {
+            // Split mode: tx0 = swaps, tx1 = axis Deposit. Sign and
+            // send sequentially so the second sees the basket tokens
+            // landed by the first. If the user aborts between, basket
+            // tokens stay in their basket ATAs; they can re-run.
+            pushLog("split: signing tx0 (swaps) then tx1 (deposit)…");
+            const sig3a = await sendVersionedTx(connection, wallet, plan.versionedTx);
+            pushLog(`✓ swaps: ${sig3a.slice(0, 12)}…`);
+            pushLog(`See: ${explorerTx(sig3a, config.explorerCluster)}`);
+            if (!plan.depositTx) {
+              throw new Error("split plan missing depositTx — internal bug");
+            }
+            const sig3b = await sendVersionedTx(connection, wallet, plan.depositTx);
+            pushLog(`✓ deposit: ${sig3b.slice(0, 12)}…`);
+            pushLog(`See: ${explorerTx(sig3b, config.explorerCluster)}`);
+          }
         } else {
           const userBasketAtas = basketMints.map((m) =>
             getAssociatedTokenAddressSync(m, publicKey),
@@ -305,59 +338,74 @@ export function CreateEtfPanel({
             </ul>
           </div>
 
-          <div className="flex items-center gap-3 text-xs">
-            <label className="flex items-center gap-2">
-              <input
-                type="checkbox"
-                checked={doDepositAfter}
-                onChange={(e) => setDoDepositAfter(e.target.checked)}
-              />
-              <span className="text-slate-300">also Deposit after create</span>
-            </label>
-            {doDepositAfter && config.jupiterEnabled ? (
-              <>
-                <label className="flex items-center gap-1">
-                  <span className="text-slate-400">SOL seed via Jupiter:</span>
-                  <input
-                    type="number"
-                    min={0.001}
-                    step={0.001}
-                    value={solSeed}
-                    onChange={(e) => setSolSeed(Number(e.target.value))}
-                    className="w-28 rounded bg-slate-800 px-2 py-1 font-mono text-slate-100"
-                  />
-                </label>
-                <label className="flex items-center gap-1">
-                  <span className="text-slate-400">Jup slippage bps:</span>
-                  <input
-                    type="number"
-                    min={1}
-                    max={500}
-                    value={slippageBps}
-                    onChange={(e) => setSlippageBps(Number(e.target.value))}
-                    className="w-20 rounded bg-slate-800 px-2 py-1 font-mono text-slate-100"
-                  />
-                </label>
-              </>
-            ) : doDepositAfter && (
-              <label className="flex items-center gap-1">
-                <span className="text-slate-400">
-                  base amount (≥ 1_000_000; per-leg = amount × weight ÷ 10000):
-                </span>
+          <div className="space-y-3 text-xs">
+            <div className="flex flex-wrap items-center gap-3">
+              <label className="flex items-center gap-2">
                 <input
-                  type="number"
-                  min={1_000_000}
-                  step={1_000_000}
-                  value={depositBase}
-                  onChange={(e) => setDepositBase(Number(e.target.value))}
-                  className="w-40 rounded bg-slate-800 px-2 py-1 font-mono text-slate-100"
+                  type="checkbox"
+                  checked={doDepositAfter}
+                  onChange={(e) => setDoDepositAfter(e.target.checked)}
                 />
+                <span className="text-slate-300">also Deposit after create</span>
               </label>
-            )}
-            {doDepositAfter && !config.jupiterEnabled && depositBase < 1_000_000 && (
-              <span className="text-xs text-rose-400">
-                ✗ amount &lt; MIN_FIRST_DEPOSIT (1_000_000) — first Deposit will revert with InsufficientFirstDeposit
-              </span>
+              {doDepositAfter && config.jupiterEnabled ? (
+                <>
+                  <label className="flex items-center gap-1">
+                    <span className="text-slate-400">SOL seed via Jupiter:</span>
+                    <input
+                      type="number"
+                      min={0.001}
+                      step={0.001}
+                      value={solSeed}
+                      onChange={(e) => setSolSeed(Number(e.target.value))}
+                      className="w-28 rounded bg-slate-800 px-2 py-1 font-mono text-slate-100"
+                    />
+                  </label>
+                  <label className="flex items-center gap-1">
+                    <span className="text-slate-400">Jup slippage bps:</span>
+                    <input
+                      type="number"
+                      min={1}
+                      max={500}
+                      value={slippageBps}
+                      onChange={(e) => setSlippageBps(Number(e.target.value))}
+                      className="w-20 rounded bg-slate-800 px-2 py-1 font-mono text-slate-100"
+                    />
+                  </label>
+                  <span className="text-[11px] text-slate-500">
+                    First deposit must yield ≥ 1.0 ETF (1_000_000 base units);
+                    plan-builder rejects smaller seeds before sending.
+                  </span>
+                </>
+              ) : doDepositAfter && (
+                <label className="flex items-center gap-1">
+                  <span className="text-slate-400">
+                    base amount (≥ 1_000_000; per-leg = amount × weight ÷ 10000):
+                  </span>
+                  <input
+                    type="number"
+                    min={1_000_000}
+                    step={1_000_000}
+                    value={depositBase}
+                    onChange={(e) => setDepositBase(Number(e.target.value))}
+                    className="w-40 rounded bg-slate-800 px-2 py-1 font-mono text-slate-100"
+                  />
+                </label>
+              )}
+              {doDepositAfter && !config.jupiterEnabled && depositBase < 1_000_000 && (
+                <span className="text-xs text-rose-400">
+                  ✗ amount &lt; MIN_FIRST_DEPOSIT (1_000_000) — first Deposit will revert with InsufficientFirstDeposit
+                </span>
+              )}
+            </div>
+
+            {doDepositAfter && config.jupiterEnabled && (
+              <JupiterSeedPreviewCard
+                basket={rows}
+                weightsOk={weightsOk}
+                solSeed={solSeed}
+                slippageBps={slippageBps}
+              />
             )}
           </div>
 

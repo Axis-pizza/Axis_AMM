@@ -27,6 +27,8 @@ export async function sendTx(
   if (!wallet.publicKey || !wallet.sendTransaction) {
     throw new Error("Wallet not connected");
   }
+  await assertFeePayerExists(conn, wallet.publicKey);
+
   const tx = new Transaction();
   for (const ix of ixs) tx.add(ix);
   tx.feePayer = wallet.publicKey as PublicKey;
@@ -81,6 +83,7 @@ export async function sendVersionedTx(
   if (!wallet.publicKey || !wallet.sendTransaction) {
     throw new Error("Wallet not connected");
   }
+  await assertFeePayerExists(conn, wallet.publicKey);
   const { blockhash, lastValidBlockHeight } = await conn.getLatestBlockhash(
     "confirmed",
   );
@@ -105,6 +108,18 @@ export async function sendVersionedTx(
     return sig;
   } catch (e) {
     throw await enrichTxError(conn, e);
+  }
+}
+
+async function assertFeePayerExists(
+  conn: Connection,
+  feePayer: PublicKey,
+): Promise<void> {
+  const feePayerInfo = await conn.getAccountInfo(feePayer, "confirmed");
+  if (!feePayerInfo) {
+    throw new Error(
+      "Fee payer account not found on this cluster. Fund the wallet before sending transactions.",
+    );
   }
 }
 
@@ -201,6 +216,22 @@ function labelForCode(hex: string): string | null {
     "0x233a": "axis-vault: InsufficientFirstDeposit (amount must be >= 1_000_000 base units)", // 9018
     "0x233b": "axis-vault: InvalidTicker (A-Z 0-9, 2..16 bytes)", // 9019
     "0x233c": "axis-vault: InvalidName (>32 bytes or empty)", // 9020
+    "0x233d": "axis-vault: SweepForbidden",            // 9021
+    "0x233e": "axis-vault: NothingToSweep",            // 9022
+    "0x233f": "axis-vault: TreasuryNotApproved",       // 9023
+    "0x2340": "axis-vault: NotYetImplemented",         // 9024
+    "0x2341": "axis-vault: BasketTooLargeForOnchainSol", // 9025
+    "0x2342": "axis-vault: InvalidJupiterProgram",     // 9026
+    "0x2343": "axis-vault: WsolMintMismatch",          // 9027
+    "0x2344": "axis-vault: LegSumMismatch",            // 9028
+    "0x2345": "axis-vault: LegCountMismatch",          // 9029
+    "0x2346": "axis-vault: JupiterCpiNoOutput",        // 9030
+    "0x2347": "axis-vault: EtfNotBootstrapped",        // 9031
+    "0x2348": "axis-vault: MalformedLegData",          // 9032
+    "0x2349": "axis-vault: FeeTooHigh",                // 9033
+    "0x234a": "axis-vault: TvlCapExceeded",            // 9034
+    "0x234b": "axis-vault: InvalidCapDecrease",        // 9035
+    "0x234c": "axis-vault: ExcessVaultDrain",          // 9036
     // pfda-amm-3 — PfdaError = 8000 + variant_index
     "0x1f40": "pfda-amm-3: InvalidDiscriminator",       // 8000
     "0x1f41": "pfda-amm-3: ReentrancyDetected",         // 8001

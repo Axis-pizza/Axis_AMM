@@ -6,6 +6,7 @@ import { ProgramCard } from "./components/ProgramCard";
 import { ScopeNote } from "./components/ScopeNote";
 import { TokensPanel } from "./components/TokensPanel";
 import { CreateEtfPanel } from "./components/CreateEtfPanel";
+import { WithdrawSolPanel } from "./components/WithdrawSolPanel";
 import { PfmmPanel } from "./components/PfmmPanel";
 import { getClusterConfig, type Cluster, type ClusterConfig } from "./lib/programs";
 import { fetchWalletTokens } from "./lib/tokens";
@@ -21,7 +22,7 @@ export default function App() {
   );
 }
 
-type Tab = "overview" | "tokens" | "etf" | "pfmm";
+type Tab = "overview" | "tokens" | "etf" | "withdraw" | "pfmm";
 
 function Shell({
   config,
@@ -109,6 +110,8 @@ function Shell({
             />
           </div>
         )}
+
+        {tab === "withdraw" && <WithdrawSolPanel config={config} />}
 
         {tab === "pfmm" && (
           <div className="space-y-6">
@@ -199,6 +202,7 @@ function Tabs({
     { id: "overview", label: "Overview" },
     { id: "tokens", label: "Tokens" },
     { id: "etf", label: "Create ETF" },
+    { id: "withdraw", label: "Withdraw → SOL" },
     { id: "pfmm", label: "PFMM" },
   ];
   return (

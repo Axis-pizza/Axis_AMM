@@ -156,6 +156,63 @@ export function ixDeposit(args: DepositArgs): TransactionInstruction {
   });
 }
 
+export interface WithdrawArgs {
+  programId: PublicKey;
+  payer: PublicKey;
+  etfState: PublicKey;
+  etfMint: PublicKey;
+  userEtfAta: PublicKey;
+  treasuryEtfAta: PublicKey;
+  vaults: PublicKey[];
+  userBasketAccounts: PublicKey[];
+  burnAmount: bigint;
+  /// Minimum SUM of basket-token outputs across all legs. Mirrors the
+  /// on-chain pre-transfer slippage guard in
+  /// `contracts/axis-vault/src/instructions/withdraw.rs:139-166`.
+  minTokensOut: bigint;
+  name: string;
+}
+
+/// Withdraw — burn ETF tokens, return proportional basket tokens.
+/// Account layout differs from Deposit: vaults come BEFORE user basket
+/// ATAs because funds flow vault → user (the reverse of Deposit).
+/// On-chain reads vault[i] at index `6+i` and user_dest[i] at `6+N+i`.
+export function ixWithdraw(args: WithdrawArgs): TransactionInstruction {
+  if (args.vaults.length !== args.userBasketAccounts.length) {
+    throw new Error("vaults / userBasketAccounts length mismatch");
+  }
+  const nameBytes = Buffer.from(args.name);
+  const data = Buffer.concat([
+    Buffer.from([2]),
+    u64Le(args.burnAmount),
+    u64Le(args.minTokensOut),
+    Buffer.from([nameBytes.length]),
+    nameBytes,
+  ]);
+  return new TransactionInstruction({
+    programId: args.programId,
+    keys: [
+      { pubkey: args.payer, isSigner: true, isWritable: true },
+      { pubkey: args.etfState, isSigner: false, isWritable: true },
+      { pubkey: args.etfMint, isSigner: false, isWritable: true },
+      { pubkey: args.userEtfAta, isSigner: false, isWritable: true },
+      { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+      { pubkey: args.treasuryEtfAta, isSigner: false, isWritable: true },
+      ...args.vaults.map((v) => ({
+        pubkey: v,
+        isSigner: false,
+        isWritable: true,
+      })),
+      ...args.userBasketAccounts.map((u) => ({
+        pubkey: u,
+        isSigner: false,
+        isWritable: true,
+      })),
+    ],
+    data,
+  });
+}
+
 // ───────── pfda-amm-3 PDAs + builders ─────────
 
 export function findPool3(

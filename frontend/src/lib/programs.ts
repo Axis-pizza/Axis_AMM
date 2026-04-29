@@ -72,6 +72,7 @@ export function getClusterConfig(cluster: Cluster): ClusterConfig {
     rpcUrl: import.meta.env.VITE_DEVNET_RPC_URL ?? "https://api.devnet.solana.com",
     explorerCluster: "devnet",
     jupiterEnabled: false,
+    protocolTreasury: MAINNET_PROTOCOL_TREASURY,
     programs: DEVNET_PROGRAMS,
   };
 }

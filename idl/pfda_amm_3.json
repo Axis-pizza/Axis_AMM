@@ -1,0 +1,333 @@
+{
+  "spec": "axis.manual-idl.v1",
+  "name": "pfda_amm_3",
+  "displayName": "PFDA AMM 3-Token",
+  "version": "0.1.0",
+  "programId": "3SBbfZgzAHyaijxbUbxBLt89aX6Z2d4ptL5PH6pzMazV",
+  "network": "mainnet-beta",
+  "framework": "pinocchio",
+  "anchorCompatible": false,
+  "description": "Manual IDL for the Pinocchio pfda-amm-3 program — a 3-token Periodic Fee-Discount Auction AMM with discrete batch windows, oracle-bounded clearing prices, and Jito bid-for-clearing.",
+  "metadata": {
+    "deployedAtSlot": 416476977,
+    "deploySignature": "3q2cXvPVskHfWRyEHoF8YZXoodm9Y3Kxwd2HWEU4ys1qCMovAF4NjH6uxYjEmGnzyFUtct8XourUaFqUqHs87fh3",
+    "programData": "Hy46nZWmSzFjyDcQvVdF51RiiT4EcTjBo85t5SKZj6ax",
+    "upgradeAuthority": "BtjuCMkLC9MuzagvGSS9E26XjMNTBR6isj8e1xVyeak6",
+    "sbfSha256": "0d73e873b5a01b95d219520e967ff4837e9202aa4210ab7d77bad00ae596282e",
+    "verifyNormalizedHash": "b75828371550e3fa7e9955cb6edac4c53a10c0dab6ec0d0ab4ee44150263fa98",
+    "otterSecVerified": true,
+    "otterSecJobId": "f52b115f-bd3f-4703-a044-f8601b3c3a8f",
+    "otterSecVerifyPda": "BbhvCmpxtTsfJWySJPBRSaxGV7ap3wNgLJ3s5MVnaLhd",
+    "sourceRepo": "https://github.com/Axis-pizza/Axis_AMM",
+    "sourceCommit": "af3c2296e47b205dba8d437ebe89c371902a6544",
+    "verifiableBuildImage": "solanafoundation/solana-verifiable-build:3.0.14"
+  },
+  "pdas": [
+    {
+      "name": "pool",
+      "seeds": ["utf8:pool3", "tokenMint0", "tokenMint1", "tokenMint2"],
+      "description": "PoolState3 PDA. The 3 mint pubkeys define the pool identity; order matters."
+    },
+    {
+      "name": "queue",
+      "seeds": ["utf8:queue3", "pool", "u64le:batchId"],
+      "description": "BatchQueue3 PDA holding the active batch's per-token aggregated input."
+    },
+    {
+      "name": "history",
+      "seeds": ["utf8:history3", "pool", "u64le:batchId"],
+      "description": "ClearedBatchHistory3 PDA written by ClearBatch; consumed by Claim."
+    },
+    {
+      "name": "ticket",
+      "seeds": ["utf8:ticket3", "pool", "user", "u64le:batchId"],
+      "description": "UserOrderTicket3 PDA tracking a single user's swap intent for a batch."
+    }
+  ],
+  "constants": {
+    "tokenCount": 3,
+    "weightsMicroSum": 1000000,
+    "maxBaseFeeBps": 100,
+    "tokenProgram": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+    "switchboardOnDemand": "SBondMDrcV3K4kxZR1HNVT7osZxAHVHgYXL5Ze1oMUv",
+    "mainnetSetBatchIdGated": "Discriminator 9 (SetBatchId) is feature-gated behind `cargo build-sbf --features test-time-warp` and absent from the mainnet binary; mainnet rejects disc 9 with InvalidInstructionData."
+  },
+  "instructions": [
+    {
+      "name": "initializePool",
+      "discriminator": 0,
+      "accounts": [
+        {"index": 0, "name": "payer", "signer": true, "writable": true, "description": "Pool creator and authority."},
+        {"index": 1, "name": "pool", "signer": false, "writable": true, "description": "PoolState3 PDA, allocated here."},
+        {"index": 2, "name": "queue", "signer": false, "writable": true, "description": "BatchQueue3 PDA for batch_id=0."},
+        {"index": 3, "name": "tokenMint0", "signer": false, "writable": false},
+        {"index": 4, "name": "tokenMint1", "signer": false, "writable": false},
+        {"index": 5, "name": "tokenMint2", "signer": false, "writable": false},
+        {"index": 6, "name": "vault0", "signer": false, "writable": true, "description": "Bare token account allocated by client; program calls InitializeAccount3 in-handler."},
+        {"index": 7, "name": "vault1", "signer": false, "writable": true},
+        {"index": 8, "name": "vault2", "signer": false, "writable": true},
+        {"index": 9, "name": "treasury", "signer": false, "writable": false, "description": "Treasury key recorded on the pool; receives bids via ClearBatch and fees via WithdrawFees."},
+        {"index": 10, "name": "systemProgram", "signer": false, "writable": false},
+        {"index": 11, "name": "tokenProgram", "signer": false, "writable": false}
+      ],
+      "args": [
+        {"name": "feeBps", "type": "u16le", "constraints": "<= maxBaseFeeBps (100); immutable post-init"},
+        {"name": "windowSlots", "type": "u64le", "description": "Length of each batch window in Solana slots."},
+        {"name": "weight0", "type": "u32le"},
+        {"name": "weight1", "type": "u32le"},
+        {"name": "weight2", "type": "u32le", "constraints": "weights[0] + weights[1] + weights[2] == 1_000_000"}
+      ]
+    },
+    {
+      "name": "swapRequest",
+      "discriminator": 1,
+      "accounts": [
+        {"index": 0, "name": "user", "signer": true, "writable": true},
+        {"index": 1, "name": "pool", "signer": false, "writable": false},
+        {"index": 2, "name": "queue", "signer": false, "writable": true},
+        {"index": 3, "name": "ticket", "signer": false, "writable": true, "description": "UserOrderTicket3 PDA for this batch + user."},
+        {"index": 4, "name": "userTokenIn", "signer": false, "writable": true},
+        {"index": 5, "name": "vaultIn", "signer": false, "writable": true},
+        {"index": 6, "name": "tokenProgram", "signer": false, "writable": false},
+        {"index": 7, "name": "systemProgram", "signer": false, "writable": false}
+      ],
+      "args": [
+        {"name": "inIdx", "type": "u8", "constraints": "0..3, != outIdx"},
+        {"name": "amountIn", "type": "u64le"},
+        {"name": "outIdx", "type": "u8", "constraints": "0..3, != inIdx"},
+        {"name": "minOut", "type": "u64le"}
+      ]
+    },
+    {
+      "name": "clearBatch",
+      "discriminator": 2,
+      "accounts": [
+        {"index": 0, "name": "cranker", "signer": true, "writable": true, "description": "Pays bid; in mainnet flow this is a Jito searcher."},
+        {"index": 1, "name": "pool", "signer": false, "writable": true},
+        {"index": 2, "name": "queue", "signer": false, "writable": true},
+        {"index": 3, "name": "history", "signer": false, "writable": true},
+        {"index": 4, "name": "nextQueue", "signer": false, "writable": true, "description": "BatchQueue3 PDA at batchId+1; allocated here so SwapRequest can land in the next window."},
+        {"index": 5, "name": "systemProgram", "signer": false, "writable": false},
+        {"index": "6..", "name": "switchboardOracleFeeds", "signer": false, "writable": false, "description": "Optional Switchboard On-Demand feed accounts. If supplied, all 3 feeds must be present and fresh; mixed staleness aborts the batch (sandwich-resistance, see clear_batch.rs)."},
+        {"index": "trailing", "name": "treasuryAndJitoTip", "signer": false, "writable": true, "description": "Treasury account + optional Jito tip account when `bidLamports > 0`."}
+      ],
+      "args": [
+        {"name": "bidLamports", "type": "u64le", "description": "Bid paid to pool.treasury (alpha-split with Jito tip per `jito.rs`)."}
+      ],
+      "notes": [
+        "Strict-mode oracle: when feeds are supplied, all 3 must be fresh; mixed staleness aborts with OracleStale.",
+        "Reentrancy guard at PoolState3.reentrancy_guard."
+      ]
+    },
+    {
+      "name": "claim",
+      "discriminator": 3,
+      "accounts": [
+        {"index": 0, "name": "user", "signer": true, "writable": false},
+        {"index": 1, "name": "pool", "signer": false, "writable": true},
+        {"index": 2, "name": "history", "signer": false, "writable": false},
+        {"index": 3, "name": "ticket", "signer": false, "writable": true},
+        {"index": 4, "name": "vault0", "signer": false, "writable": true},
+        {"index": 5, "name": "vault1", "signer": false, "writable": true},
+        {"index": 6, "name": "vault2", "signer": false, "writable": true},
+        {"index": 7, "name": "userToken0", "signer": false, "writable": true},
+        {"index": 8, "name": "userToken1", "signer": false, "writable": true},
+        {"index": 9, "name": "userToken2", "signer": false, "writable": true},
+        {"index": 10, "name": "tokenProgram", "signer": false, "writable": false}
+      ],
+      "args": []
+    },
+    {
+      "name": "addLiquidity",
+      "discriminator": 4,
+      "accounts": [
+        {"index": 0, "name": "payer", "signer": true, "writable": true, "description": "LP."},
+        {"index": 1, "name": "pool", "signer": false, "writable": true},
+        {"index": 2, "name": "vault0", "signer": false, "writable": true},
+        {"index": 3, "name": "vault1", "signer": false, "writable": true},
+        {"index": 4, "name": "vault2", "signer": false, "writable": true},
+        {"index": 5, "name": "userToken0", "signer": false, "writable": true},
+        {"index": 6, "name": "userToken1", "signer": false, "writable": true},
+        {"index": 7, "name": "userToken2", "signer": false, "writable": true},
+        {"index": 8, "name": "tokenProgram", "signer": false, "writable": false}
+      ],
+      "args": [
+        {"name": "amount0", "type": "u64le"},
+        {"name": "amount1", "type": "u64le"},
+        {"name": "amount2", "type": "u64le"}
+      ]
+    },
+    {
+      "name": "withdrawFees",
+      "discriminator": 5,
+      "accounts": [
+        {"index": 0, "name": "authority", "signer": true, "writable": false, "description": "Must equal pool.authority."},
+        {"index": 1, "name": "pool", "signer": false, "writable": true},
+        {"index": 2, "name": "vault0", "signer": false, "writable": true},
+        {"index": 3, "name": "vault1", "signer": false, "writable": true},
+        {"index": 4, "name": "vault2", "signer": false, "writable": true},
+        {"index": 5, "name": "treasuryToken0", "signer": false, "writable": true},
+        {"index": 6, "name": "treasuryToken1", "signer": false, "writable": true},
+        {"index": 7, "name": "treasuryToken2", "signer": false, "writable": true}
+      ],
+      "args": [
+        {"name": "amount0", "type": "u64le"},
+        {"name": "amount1", "type": "u64le"},
+        {"name": "amount2", "type": "u64le"}
+      ],
+      "notes": [
+        "Decrements pool.reserves[i] by amounts[i] in the same instruction so subsequent ClearBatch / SwapRequest price against the post-withdraw balance (#33).",
+        "Reverts FeeWithdrawExceedsReserves (8032) if any amount exceeds tracked reserves."
+      ]
+    },
+    {
+      "name": "setPaused",
+      "discriminator": 6,
+      "accounts": [
+        {"index": 0, "name": "authority", "signer": true, "writable": false, "description": "Must equal pool.authority."},
+        {"index": 1, "name": "pool", "signer": false, "writable": true}
+      ],
+      "args": [
+        {"name": "paused", "type": "u8", "description": "Any non-zero value normalizes to 1; 0 means active."}
+      ]
+    },
+    {
+      "name": "closeBatchHistory",
+      "discriminator": 7,
+      "accounts": [
+        {"index": 0, "name": "rentRecipient", "signer": true, "writable": true, "description": "Authority-restricted (#33)."},
+        {"index": 1, "name": "pool", "signer": false, "writable": false},
+        {"index": 2, "name": "history", "signer": false, "writable": true, "description": "Closed account; rent refunded to rentRecipient."}
+      ],
+      "args": [],
+      "notes": [
+        "Cranker housekeeping: closes a ClearedBatchHistory3 PDA after a delay so its rent can be reclaimed. Mainnet binary cannot fast-forward `pool.current_batch_id` (disc 9 SetBatchId is gated out)."
+      ]
+    },
+    {
+      "name": "closeExpiredTicket",
+      "discriminator": 8,
+      "accounts": [
+        {"index": 0, "name": "rentRecipient", "signer": true, "writable": true},
+        {"index": 1, "name": "pool", "signer": false, "writable": false},
+        {"index": 2, "name": "ticket", "signer": false, "writable": true, "description": "Closed account; rent refunded to rentRecipient."}
+      ],
+      "args": [],
+      "notes": [
+        "Closes a UserOrderTicket3 PDA after the close-delay window has elapsed. Used to reclaim rent on tickets the user never claimed."
+      ]
+    }
+  ],
+  "accounts": [
+    {
+      "name": "PoolState3",
+      "size": 336,
+      "discriminator": "pool3st\u0000",
+      "fields": [
+        {"name": "discriminator", "type": "bytes[8]", "offset": 0},
+        {"name": "tokenMints", "type": "pubkey[3]", "offset": 8},
+        {"name": "vaults", "type": "pubkey[3]", "offset": 104},
+        {"name": "reserves", "type": "u64le[3]", "offset": 200},
+        {"name": "weights", "type": "u32le[3]", "offset": 224, "description": "Micro-units, sum = 1_000_000"},
+        {"name": "_alignBeforeWindowSlots", "type": "bytes[4]", "offset": 236, "padding": true},
+        {"name": "windowSlots", "type": "u64le", "offset": 240},
+        {"name": "currentBatchId", "type": "u64le", "offset": 248},
+        {"name": "currentWindowEnd", "type": "u64le", "offset": 256},
+        {"name": "treasury", "type": "pubkey", "offset": 264},
+        {"name": "authority", "type": "pubkey", "offset": 296},
+        {"name": "baseFeeBps", "type": "u16le", "offset": 328},
+        {"name": "bump", "type": "u8", "offset": 330},
+        {"name": "reentrancyGuard", "type": "u8", "offset": 331},
+        {"name": "paused", "type": "u8", "offset": 332, "description": "0 = active; 1 = paused"},
+        {"name": "_padding", "type": "bytes[3]", "offset": 333, "padding": true}
+      ]
+    },
+    {
+      "name": "BatchQueue3",
+      "size": 88,
+      "discriminator": "batch3q\u0000",
+      "fields": [
+        {"name": "discriminator", "type": "bytes[8]", "offset": 0},
+        {"name": "pool", "type": "pubkey", "offset": 8},
+        {"name": "batchId", "type": "u64le", "offset": 40},
+        {"name": "totalIn", "type": "u64le[3]", "offset": 48, "description": "Per-token aggregated input."},
+        {"name": "windowEndSlot", "type": "u64le", "offset": 72},
+        {"name": "bump", "type": "u8", "offset": 80},
+        {"name": "_padding", "type": "bytes[7]", "offset": 81, "padding": true}
+      ]
+    },
+    {
+      "name": "ClearedBatchHistory3",
+      "size": 128,
+      "discriminator": "clrd3h\u0000\u0000",
+      "fields": [
+        {"name": "discriminator", "type": "bytes[8]", "offset": 0},
+        {"name": "pool", "type": "pubkey", "offset": 8},
+        {"name": "batchId", "type": "u64le", "offset": 40},
+        {"name": "clearingPrices", "type": "u64le[3]", "offset": 48, "description": "Q32.32 per-token clearing prices."},
+        {"name": "totalOut", "type": "u64le[3]", "offset": 72},
+        {"name": "totalIn", "type": "u64le[3]", "offset": 96},
+        {"name": "feeBps", "type": "u16le", "offset": 120, "description": "Snapshot of pool.baseFeeBps at clear time."},
+        {"name": "isCleared", "type": "u8", "offset": 122},
+        {"name": "bump", "type": "u8", "offset": 123},
+        {"name": "_padding", "type": "bytes[4]", "offset": 124, "padding": true}
+      ]
+    },
+    {
+      "name": "UserOrderTicket3",
+      "size": 128,
+      "discriminator": "usrord3\u0000",
+      "fields": [
+        {"name": "discriminator", "type": "bytes[8]", "offset": 0},
+        {"name": "owner", "type": "pubkey", "offset": 8},
+        {"name": "pool", "type": "pubkey", "offset": 40},
+        {"name": "batchId", "type": "u64le", "offset": 72},
+        {"name": "amountsIn", "type": "u64le[3]", "offset": 80, "description": "Only one slot should be > 0."},
+        {"name": "outTokenIdx", "type": "u8", "offset": 104},
+        {"name": "_alignBeforeMinAmountOut", "type": "bytes[7]", "offset": 105, "padding": true},
+        {"name": "minAmountOut", "type": "u64le", "offset": 112},
+        {"name": "isClaimed", "type": "u8", "offset": 120},
+        {"name": "bump", "type": "u8", "offset": 121},
+        {"name": "_padding", "type": "bytes[6]", "offset": 122, "padding": true}
+      ]
+    }
+  ],
+  "errors": [
+    {"code": 8000, "name": "InvalidDiscriminator"},
+    {"code": 8001, "name": "ReentrancyDetected"},
+    {"code": 8002, "name": "BatchWindowNotEnded"},
+    {"code": 8003, "name": "BatchAlreadyCleared"},
+    {"code": 8004, "name": "TicketAlreadyClaimed"},
+    {"code": 8005, "name": "BatchNotCleared"},
+    {"code": 8006, "name": "SlippageExceeded"},
+    {"code": 8007, "name": "InvalidSwapInput"},
+    {"code": 8008, "name": "Overflow"},
+    {"code": 8009, "name": "InvalidWeight"},
+    {"code": 8010, "name": "BatchIdMismatch"},
+    {"code": 8011, "name": "PoolMismatch"},
+    {"code": 8012, "name": "OwnerMismatch"},
+    {"code": 8013, "name": "ClearingPriceFailed"},
+    {"code": 8014, "name": "InvalidWindowSlots"},
+    {"code": 8015, "name": "AlreadyInitialized"},
+    {"code": 8016, "name": "InvalidTokenIndex"},
+    {"code": 8017, "name": "DivisionByZero"},
+    {"code": 8018, "name": "PoolPaused"},
+    {"code": 8019, "name": "TreasuryMismatch"},
+    {"code": 8020, "name": "OracleInvalid"},
+    {"code": 8021, "name": "OraclePriceNegative"},
+    {"code": 8022, "name": "OracleStale"},
+    {"code": 8023, "name": "OracleInsufficientSamples"},
+    {"code": 8024, "name": "BidTooLow"},
+    {"code": 8025, "name": "VaultMismatch"},
+    {"code": 8026, "name": "MintMismatch"},
+    {"code": 8027, "name": "BidWithoutTreasury"},
+    {"code": 8028, "name": "OracleOwnerMismatch"},
+    {"code": 8029, "name": "ReserveInsufficient"},
+    {"code": 8030, "name": "InvariantViolation"},
+    {"code": 8031, "name": "BidExcessive"},
+    {"code": 8032, "name": "FeeWithdrawExceedsReserves"},
+    {"code": 8033, "name": "InvalidFeeBps"},
+    {"code": 8034, "name": "PdaMismatch"},
+    {"code": 8035, "name": "Unauthorized"}
+  ]
+}

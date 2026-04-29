@@ -1,0 +1,279 @@
+{
+  "spec": "axis.manual-idl.v1",
+  "name": "axis_vault",
+  "displayName": "Axis Vault",
+  "version": "0.1.0",
+  "programId": "Agae3WetHx7J9CE7nP927ekzAeegSKE1KfkZDMYLDGHX",
+  "network": "mainnet-beta",
+  "framework": "pinocchio",
+  "anchorCompatible": false,
+  "description": "Manual IDL for the Pinocchio axis-vault program. Instruction data uses a one-byte discriminator followed by the layouts below.",
+  "metadata": {
+    "deployedAtSlot": 416272971,
+    "deploySignature": "2TBxweDiUk96FAY9hmmPD9cEPcT6NUAsZEbEkvvWQiNLagukYfni7TyZzh3u5CdEHPk9f3Jb9DRbLt6R6wvsMHBY",
+    "programData": "6szAV5iFQKzJ7BuYZipSeWc3thauWCVi9q26k1WQEjrt",
+    "upgradeAuthority": "BtjuCMkLC9MuzagvGSS9E26XjMNTBR6isj8e1xVyeak6",
+    "protocolTreasury": "BtjuCMkLC9MuzagvGSS9E26XjMNTBR6isj8e1xVyeak6",
+    "sbfSha256": "bdad2e1ed2248618b624625318c653b4b29dc78442b8d2ca042e087b147439a0"
+  },
+  "pdas": [
+    {
+      "name": "etfState",
+      "seeds": ["utf8:etf", "authority", "name"],
+      "description": "PDA for EtfState. CreateEtf derives [b\"etf\", authority, name]."
+    }
+  ],
+  "constants": {
+    "maxBasketTokens": 5,
+    "maxOnchainSolIxLegs": 3,
+    "etfMintDecimals": 6,
+    "weightsBpsSum": 10000,
+    "defaultFeeBps": 30,
+    "maxFeeBpsCeiling": 300,
+    "maxNavDeviationBps": 300,
+    "minFirstDeposit": "1000000",
+    "minimumLiquidity": "1000",
+    "tokenProgram": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+    "jupiterV6Program": "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4",
+    "wsolMint": "So11111111111111111111111111111111111111112"
+  },
+  "instructions": [
+    {
+      "name": "createEtf",
+      "discriminator": 0,
+      "accounts": [
+        {"index": 0, "name": "authority", "signer": true, "writable": true},
+        {"index": 1, "name": "etfState", "signer": false, "writable": true},
+        {"index": 2, "name": "etfMint", "signer": false, "writable": true},
+        {"index": 3, "name": "treasury", "signer": false, "writable": false},
+        {"index": 4, "name": "systemProgram", "signer": false, "writable": false},
+        {"index": 5, "name": "tokenProgram", "signer": false, "writable": false},
+        {"index": "6..6+N", "name": "basketMints", "signer": false, "writable": false},
+        {"index": "6+N..6+2N", "name": "basketVaults", "signer": false, "writable": true}
+      ],
+      "args": [
+        {"name": "tokenCount", "type": "u8", "constraints": "2..=5"},
+        {"name": "weightsBps", "type": "u16le[tokenCount]", "constraints": "sum == 10000"},
+        {"name": "tickerLen", "type": "u8"},
+        {"name": "ticker", "type": "bytes[tickerLen]", "constraints": "2..=16 ASCII uppercase A-Z or 0-9"},
+        {"name": "nameLen", "type": "u8"},
+        {"name": "name", "type": "bytes[nameLen]", "constraints": "1..=32 UTF-8; PDA seed"}
+      ]
+    },
+    {
+      "name": "deposit",
+      "discriminator": 1,
+      "accounts": [
+        {"index": 0, "name": "depositor", "signer": true, "writable": false},
+        {"index": 1, "name": "etfState", "signer": false, "writable": true},
+        {"index": 2, "name": "etfMint", "signer": false, "writable": true},
+        {"index": 3, "name": "depositorEtfAta", "signer": false, "writable": true},
+        {"index": 4, "name": "tokenProgram", "signer": false, "writable": false},
+        {"index": 5, "name": "treasuryEtfAta", "signer": false, "writable": true},
+        {"index": "6..6+N", "name": "depositorBasketAtas", "signer": false, "writable": true},
+        {"index": "6+N..6+2N", "name": "basketVaults", "signer": false, "writable": true}
+      ],
+      "args": [
+        {"name": "amount", "type": "u64le", "description": "Base amount; per-token transfer is amount * weight / 10000."},
+        {"name": "minMintOut", "type": "u64le"},
+        {"name": "nameLen", "type": "u8"},
+        {"name": "name", "type": "bytes[nameLen]", "description": "ETF name PDA seed."}
+      ]
+    },
+    {
+      "name": "withdraw",
+      "discriminator": 2,
+      "accounts": [
+        {"index": 0, "name": "withdrawer", "signer": true, "writable": false},
+        {"index": 1, "name": "etfState", "signer": false, "writable": true},
+        {"index": 2, "name": "etfMint", "signer": false, "writable": true},
+        {"index": 3, "name": "withdrawerEtfAta", "signer": false, "writable": true},
+        {"index": 4, "name": "tokenProgram", "signer": false, "writable": false},
+        {"index": 5, "name": "treasuryEtfAta", "signer": false, "writable": true},
+        {"index": "6..6+N", "name": "basketVaults", "signer": false, "writable": true},
+        {"index": "6+N..6+2N", "name": "withdrawerBasketAtas", "signer": false, "writable": true}
+      ],
+      "args": [
+        {"name": "burnAmount", "type": "u64le"},
+        {"name": "minTokensOut", "type": "u64le", "description": "Minimum sum of basket outputs."},
+        {"name": "nameLen", "type": "u8"},
+        {"name": "name", "type": "bytes[nameLen]"}
+      ]
+    },
+    {
+      "name": "sweepTreasury",
+      "discriminator": 3,
+      "accounts": [
+        {"index": 0, "name": "treasury", "signer": true, "writable": false},
+        {"index": 1, "name": "etfState", "signer": false, "writable": true},
+        {"index": 2, "name": "etfMint", "signer": false, "writable": true},
+        {"index": 3, "name": "treasuryEtfAta", "signer": false, "writable": true},
+        {"index": 4, "name": "tokenProgram", "signer": false, "writable": false},
+        {"index": "5..5+N", "name": "basketVaults", "signer": false, "writable": true},
+        {"index": "5+N..5+2N", "name": "treasuryBasketAtas", "signer": false, "writable": true}
+      ],
+      "args": [
+        {"name": "nameLen", "type": "u8"},
+        {"name": "name", "type": "bytes[nameLen]"}
+      ]
+    },
+    {
+      "name": "setPaused",
+      "discriminator": 4,
+      "accounts": [
+        {"index": 0, "name": "authority", "signer": true, "writable": false},
+        {"index": 1, "name": "etfState", "signer": false, "writable": true}
+      ],
+      "args": [
+        {"name": "paused", "type": "u8", "description": "0 = active; any non-zero value is normalized to paused."}
+      ]
+    },
+    {
+      "name": "depositSol",
+      "discriminator": 5,
+      "accounts": [
+        {"index": 0, "name": "depositor", "signer": true, "writable": true},
+        {"index": 1, "name": "etfState", "signer": false, "writable": true},
+        {"index": 2, "name": "etfMint", "signer": false, "writable": true},
+        {"index": 3, "name": "depositorEtfAta", "signer": false, "writable": true},
+        {"index": 4, "name": "tokenProgram", "signer": false, "writable": false},
+        {"index": 5, "name": "treasuryEtfAta", "signer": false, "writable": true},
+        {"index": 6, "name": "wsolAta", "signer": false, "writable": true},
+        {"index": 7, "name": "wsolMint", "signer": false, "writable": false},
+        {"index": 8, "name": "jupiterProgram", "signer": false, "writable": false},
+        {"index": 9, "name": "systemProgram", "signer": false, "writable": false},
+        {"index": "10..10+N", "name": "basketVaults", "signer": false, "writable": true},
+        {"index": "10+N..", "name": "jupiterRouteAccounts", "signer": false, "writable": "route-defined"}
+      ],
+      "args": [
+        {"name": "solIn", "type": "u64le"},
+        {"name": "minEtfOut", "type": "u64le"},
+        {"name": "nameLen", "type": "u8"},
+        {"name": "name", "type": "bytes[nameLen]"},
+        {"name": "legCount", "type": "u8", "constraints": "equals tokenCount, <= 3"},
+        {"name": "legs", "type": "repeated legCount times: u64le legSolAmount, u8 routeAccountCount, u32le routeLen, bytes[routeLen] routeBytes"}
+      ],
+      "notes": ["Rejects if ETF totalSupply is zero; first seed must use basket-token deposit or client-bundled Jupiter swaps plus deposit."]
+    },
+    {
+      "name": "withdrawSol",
+      "discriminator": 6,
+      "accounts": [
+        {"index": 0, "name": "withdrawer", "signer": true, "writable": true},
+        {"index": 1, "name": "etfState", "signer": false, "writable": true},
+        {"index": 2, "name": "etfMint", "signer": false, "writable": true},
+        {"index": 3, "name": "withdrawerEtfAta", "signer": false, "writable": true},
+        {"index": 4, "name": "tokenProgram", "signer": false, "writable": false},
+        {"index": 5, "name": "treasuryEtfAta", "signer": false, "writable": true},
+        {"index": 6, "name": "wsolAta", "signer": false, "writable": true},
+        {"index": 7, "name": "wsolMint", "signer": false, "writable": false},
+        {"index": 8, "name": "jupiterProgram", "signer": false, "writable": false},
+        {"index": 9, "name": "systemProgram", "signer": false, "writable": false},
+        {"index": "10..10+N", "name": "basketVaults", "signer": false, "writable": true},
+        {"index": "10+N..", "name": "jupiterRouteAccounts", "signer": false, "writable": "route-defined"}
+      ],
+      "args": [
+        {"name": "burnAmount", "type": "u64le"},
+        {"name": "minSolOut", "type": "u64le"},
+        {"name": "nameLen", "type": "u8"},
+        {"name": "name", "type": "bytes[nameLen]"},
+        {"name": "legCount", "type": "u8", "constraints": "equals tokenCount, <= 3"},
+        {"name": "legs", "type": "repeated legCount times: u8 routeAccountCount, u32le routeLen, bytes[routeLen] routeBytes"}
+      ]
+    },
+    {
+      "name": "setFee",
+      "discriminator": 7,
+      "accounts": [
+        {"index": 0, "name": "authority", "signer": true, "writable": false},
+        {"index": 1, "name": "etfState", "signer": false, "writable": true}
+      ],
+      "args": [
+        {"name": "newFeeBps", "type": "u16le", "constraints": "<= per-ETF max_fee_bps and <= 300"}
+      ]
+    },
+    {
+      "name": "setCap",
+      "discriminator": 8,
+      "accounts": [
+        {"index": 0, "name": "authority", "signer": true, "writable": false},
+        {"index": 1, "name": "etfState", "signer": false, "writable": true}
+      ],
+      "args": [
+        {"name": "newCap", "type": "u64le", "description": "Zero means uncapped and may be set from any value; non-zero values cannot decrease current cap."}
+      ]
+    }
+  ],
+  "accounts": [
+    {
+      "name": "EtfState",
+      "size": 536,
+      "discriminator": "etfstat3",
+      "fields": [
+        {"name": "discriminator", "type": "bytes[8]", "offset": 0},
+        {"name": "authority", "type": "pubkey", "offset": 8},
+        {"name": "etfMint", "type": "pubkey", "offset": 40},
+        {"name": "tokenCount", "type": "u8", "offset": 72},
+        {"name": "tokenMints", "type": "pubkey[5]", "offset": 73},
+        {"name": "tokenVaults", "type": "pubkey[5]", "offset": 233},
+        {"name": "_alignBeforeWeights", "type": "bytes[1]", "offset": 393, "padding": true},
+        {"name": "weightsBps", "type": "u16[5]", "offset": 394},
+        {"name": "_alignBeforeTotalSupply", "type": "bytes[4]", "offset": 404, "padding": true},
+        {"name": "totalSupply", "type": "u64", "offset": 408},
+        {"name": "treasury", "type": "pubkey", "offset": 416},
+        {"name": "feeBps", "type": "u16", "offset": 448},
+        {"name": "paused", "type": "u8", "offset": 450},
+        {"name": "bump", "type": "u8", "offset": 451},
+        {"name": "name", "type": "bytes[32]", "offset": 452},
+        {"name": "ticker", "type": "bytes[16]", "offset": 484},
+        {"name": "_alignBeforeCreatedAtSlot", "type": "bytes[4]", "offset": 500, "padding": true},
+        {"name": "createdAtSlot", "type": "u64", "offset": 504},
+        {"name": "maxFeeBps", "type": "u16", "offset": 512},
+        {"name": "_pad", "type": "bytes[2]", "offset": 514, "padding": true},
+        {"name": "_alignBeforeTvlCap", "type": "bytes[4]", "offset": 516, "padding": true},
+        {"name": "tvlCap", "type": "u64", "offset": 520},
+        {"name": "_padding", "type": "bytes[4]", "offset": 528, "padding": true},
+        {"name": "_trailingAlign", "type": "bytes[4]", "offset": 532, "padding": true}
+      ]
+    }
+  ],
+  "errors": [
+    {"code": 9000, "name": "InvalidDiscriminator"},
+    {"code": 9001, "name": "AlreadyInitialized"},
+    {"code": 9002, "name": "InvalidBasketSize"},
+    {"code": 9003, "name": "WeightsMismatch"},
+    {"code": 9004, "name": "ZeroDeposit"},
+    {"code": 9005, "name": "InsufficientBalance"},
+    {"code": 9006, "name": "DivisionByZero"},
+    {"code": 9007, "name": "Overflow"},
+    {"code": 9008, "name": "OwnerMismatch"},
+    {"code": 9009, "name": "MintMismatch"},
+    {"code": 9010, "name": "InvalidTickerLength"},
+    {"code": 9011, "name": "DuplicateMint"},
+    {"code": 9012, "name": "PoolPaused"},
+    {"code": 9013, "name": "VaultMismatch"},
+    {"code": 9014, "name": "InvalidProgramOwner"},
+    {"code": 9015, "name": "SlippageExceeded"},
+    {"code": 9016, "name": "NavDeviationExceeded"},
+    {"code": 9017, "name": "TreasuryMismatch"},
+    {"code": 9018, "name": "InsufficientFirstDeposit"},
+    {"code": 9019, "name": "InvalidTicker"},
+    {"code": 9020, "name": "InvalidName"},
+    {"code": 9021, "name": "SweepForbidden"},
+    {"code": 9022, "name": "NothingToSweep"},
+    {"code": 9023, "name": "TreasuryNotApproved"},
+    {"code": 9024, "name": "NotYetImplemented"},
+    {"code": 9025, "name": "BasketTooLargeForOnchainSol"},
+    {"code": 9026, "name": "InvalidJupiterProgram"},
+    {"code": 9027, "name": "WsolMintMismatch"},
+    {"code": 9028, "name": "LegSumMismatch"},
+    {"code": 9029, "name": "LegCountMismatch"},
+    {"code": 9030, "name": "JupiterCpiNoOutput"},
+    {"code": 9031, "name": "EtfNotBootstrapped"},
+    {"code": 9032, "name": "MalformedLegData"},
+    {"code": 9033, "name": "FeeTooHigh"},
+    {"code": 9034, "name": "TvlCapExceeded"},
+    {"code": 9035, "name": "InvalidCapDecrease"},
+    {"code": 9036, "name": "ExcessVaultDrain"}
+  ]
+}

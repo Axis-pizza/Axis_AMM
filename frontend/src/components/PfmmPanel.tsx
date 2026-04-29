@@ -14,7 +14,9 @@ import {
   ixClaim3,
   ixClearBatch3,
   ixInitPool3,
+  ixSetPaused3,
   ixSwapRequest3,
+  ixWithdrawFees3,
 } from "../lib/ix";
 import { buildBareTokenAccountIxs } from "../lib/spl";
 import { sendTx, explorerTx } from "../lib/tx";
@@ -24,8 +26,10 @@ import {
   AddLiquidityForm,
   ClearClaimButtons,
   InitPoolForm,
+  PausedToggle,
   PoolStatus,
   SwapRequestForm,
+  WithdrawFeesForm,
   type PoolView,
 } from "./PfmmControls";
 
@@ -60,6 +64,9 @@ export function PfmmPanel({
   const [swapInIdx, setSwapInIdx] = useState(0);
   const [swapOutIdx, setSwapOutIdx] = useState(1);
   const [swapAmountUi, setSwapAmountUi] = useState(1);
+  const [feeAmount0Ui, setFeeAmount0Ui] = useState(0);
+  const [feeAmount1Ui, setFeeAmount1Ui] = useState(0);
+  const [feeAmount2Ui, setFeeAmount2Ui] = useState(0);
 
   // We persist the pool's vault keypairs locally because the pool
   // doesn't store them in its account data and InitPool / AddLiquidity
@@ -314,6 +321,78 @@ export function PfmmPanel({
     }
   }
 
+  async function withdrawFees() {
+    if (!publicKey || !pool?.exists) return;
+    const vaults = getVaults(pool.pool);
+    if (!vaults) {
+      pushLog("✗ vault pubkeys missing");
+      return;
+    }
+    setStage("withdrawFees");
+    try {
+      // Treasury was set to `publicKey` at InitPool (see initPool above
+      // for the demo wiring); on mainnet the runbook flips this to the
+      // Squads vault. Treasury per-mint ATAs are derived deterministically
+      // and created idempotently here so the on-chain Transfer doesn't
+      // fail on a missing destination.
+      const treasury = publicKey;
+      const m = selectedMints.map((s) => new PublicKey(s)) as [PublicKey, PublicKey, PublicKey];
+      const treasuryTokens = m.map((mint) =>
+        getAssociatedTokenAddressSync(mint, treasury),
+      ) as [PublicKey, PublicKey, PublicKey];
+      const ataIxs = m.map((mint, i) =>
+        createAssociatedTokenAccountIdempotentInstruction(
+          publicKey,
+          treasuryTokens[i],
+          treasury,
+          mint,
+        ),
+      );
+      const amounts = [
+        uiToBase(feeAmount0Ui, selectedMints[0]),
+        uiToBase(feeAmount1Ui, selectedMints[1]),
+        uiToBase(feeAmount2Ui, selectedMints[2]),
+      ] as [bigint, bigint, bigint];
+      const ix = ixWithdrawFees3({
+        programId: pfmm,
+        authority: publicKey,
+        pool: pool.pool,
+        vaults,
+        treasuryTokens,
+        amounts,
+      });
+      const sig = await sendTx(connection, wallet, [...ataIxs, ix]);
+      pushLog(
+        `✓ withdraw_fees [${amounts.join(", ")}]: ${sig.slice(0, 12)}…  → ${explorerTx(sig, config.explorerCluster)}`,
+      );
+      setStage("idle");
+    } catch (e) {
+      setStage("err");
+      pushLog(`✗ ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
+  async function setPaused(paused: boolean) {
+    if (!publicKey || !pool?.exists) return;
+    setStage(paused ? "pause" : "unpause");
+    try {
+      const ix = ixSetPaused3({
+        programId: pfmm,
+        authority: publicKey,
+        pool: pool.pool,
+        paused,
+      });
+      const sig = await sendTx(connection, wallet, [ix]);
+      pushLog(
+        `✓ set_paused(${paused}): ${sig.slice(0, 12)}…  → ${explorerTx(sig, config.explorerCluster)}`,
+      );
+      setStage("idle");
+    } catch (e) {
+      setStage("err");
+      pushLog(`✗ ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
   async function claim() {
     if (!publicKey || !pool?.exists) return;
     const vaults = getVaults(pool.pool);
@@ -444,6 +523,18 @@ export function PfmmPanel({
                 windowOpen={windowOpen}
                 stage={stage}
               />
+              <WithdrawFeesForm
+                amount0={feeAmount0Ui}
+                setAmount0={setFeeAmount0Ui}
+                amount1={feeAmount1Ui}
+                setAmount1={setFeeAmount1Ui}
+                amount2={feeAmount2Ui}
+                setAmount2={setFeeAmount2Ui}
+                withdrawFees={withdrawFees}
+                stage={stage}
+                disabled={!getVaults(pool.pool)}
+              />
+              <PausedToggle paused={false} setPaused={setPaused} stage={stage} />
             </>
           )}
 

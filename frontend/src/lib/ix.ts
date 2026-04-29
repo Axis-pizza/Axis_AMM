@@ -427,3 +427,62 @@ export function ixClaim3(args: ClaimArgs): TransactionInstruction {
     data: Buffer.from([3]),
   });
 }
+
+export interface WithdrawFees3Args {
+  programId: PublicKey;
+  authority: PublicKey;
+  pool: PublicKey;
+  vaults: [PublicKey, PublicKey, PublicKey];
+  treasuryTokens: [PublicKey, PublicKey, PublicKey];
+  amounts: [bigint, bigint, bigint];
+}
+
+/// WithdrawFees (disc=5) — only the pool authority may transfer
+/// `amounts[i]` from `vaults[i]` to `treasuryTokens[i]`. On-chain
+/// asserts each vault matches `pool.vaults[i]`, decrements
+/// `pool.reserves[i]` in the same ix to keep clearing-price math
+/// in sync with real vault balances (#33). See
+/// `contracts/pfda-amm-3/src/instructions/withdraw_fees.rs`.
+export function ixWithdrawFees3(args: WithdrawFees3Args): TransactionInstruction {
+  const data = Buffer.concat([
+    Buffer.from([5]),
+    u64Le(args.amounts[0]),
+    u64Le(args.amounts[1]),
+    u64Le(args.amounts[2]),
+  ]);
+  return new TransactionInstruction({
+    programId: args.programId,
+    keys: [
+      { pubkey: args.authority, isSigner: true, isWritable: false },
+      { pubkey: args.pool, isSigner: false, isWritable: true },
+      { pubkey: args.vaults[0], isSigner: false, isWritable: true },
+      { pubkey: args.vaults[1], isSigner: false, isWritable: true },
+      { pubkey: args.vaults[2], isSigner: false, isWritable: true },
+      { pubkey: args.treasuryTokens[0], isSigner: false, isWritable: true },
+      { pubkey: args.treasuryTokens[1], isSigner: false, isWritable: true },
+      { pubkey: args.treasuryTokens[2], isSigner: false, isWritable: true },
+    ],
+    data,
+  });
+}
+
+export interface SetPaused3Args {
+  programId: PublicKey;
+  authority: PublicKey;
+  pool: PublicKey;
+  paused: boolean;
+}
+
+/// SetPaused (disc=6) — flip `pool.paused`. Authority-gated, single
+/// account mutation. Mirrors axis-vault's SetPaused but on
+/// `PoolState3`. See `contracts/pfda-amm-3/src/instructions/set_paused.rs`.
+export function ixSetPaused3(args: SetPaused3Args): TransactionInstruction {
+  return new TransactionInstruction({
+    programId: args.programId,
+    keys: [
+      { pubkey: args.authority, isSigner: true, isWritable: false },
+      { pubkey: args.pool, isSigner: false, isWritable: true },
+    ],
+    data: Buffer.from([6, args.paused ? 1 : 0]),
+  });
+}

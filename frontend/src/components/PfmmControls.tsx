@@ -238,3 +238,114 @@ export function ClearClaimButtons({
     </div>
   );
 }
+
+export function WithdrawFeesForm({
+  amount0,
+  setAmount0,
+  amount1,
+  setAmount1,
+  amount2,
+  setAmount2,
+  withdrawFees,
+  stage,
+  disabled,
+}: {
+  amount0: number;
+  setAmount0: (n: number) => void;
+  amount1: number;
+  setAmount1: (n: number) => void;
+  amount2: number;
+  setAmount2: (n: number) => void;
+  withdrawFees: () => void;
+  stage: string;
+  disabled?: boolean;
+}) {
+  const total = amount0 + amount1 + amount2;
+  return (
+    <div className="rounded border border-amber-900/50 bg-amber-950/20 p-3">
+      <p className="mb-2 text-xs font-medium text-amber-200">
+        WithdrawFees (authority only)
+      </p>
+      <p className="mb-2 text-[11px] text-slate-400">
+        Pulls vault tokens to the treasury. Decrements <code>pool.reserves</code>{" "}
+        in the same ix so the clearing-price math stays consistent — bigger
+        than your true accumulated fee withdraws real LP liquidity.
+      </p>
+      <div className="grid grid-cols-3 gap-2 text-xs">
+        <label className="flex flex-col">
+          <span className="mb-1 text-slate-400">vault[0] (UI)</span>
+          <input
+            type="number"
+            min={0}
+            step={0.001}
+            value={amount0}
+            onChange={(e) => setAmount0(Number(e.target.value))}
+            className="rounded bg-slate-800 px-2 py-1 font-mono text-slate-100"
+          />
+        </label>
+        <label className="flex flex-col">
+          <span className="mb-1 text-slate-400">vault[1] (UI)</span>
+          <input
+            type="number"
+            min={0}
+            step={0.001}
+            value={amount1}
+            onChange={(e) => setAmount1(Number(e.target.value))}
+            className="rounded bg-slate-800 px-2 py-1 font-mono text-slate-100"
+          />
+        </label>
+        <label className="flex flex-col">
+          <span className="mb-1 text-slate-400">vault[2] (UI)</span>
+          <input
+            type="number"
+            min={0}
+            step={0.001}
+            value={amount2}
+            onChange={(e) => setAmount2(Number(e.target.value))}
+            className="rounded bg-slate-800 px-2 py-1 font-mono text-slate-100"
+          />
+        </label>
+      </div>
+      <button
+        onClick={withdrawFees}
+        disabled={disabled || stage !== "idle" || total <= 0}
+        className="mt-2 rounded-lg bg-amber-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-amber-500 disabled:opacity-50"
+      >
+        {stage === "withdrawFees" ? "withdrawing..." : "WithdrawFees"}
+      </button>
+    </div>
+  );
+}
+
+export function PausedToggle({
+  paused,
+  setPaused,
+  stage,
+}: {
+  paused: boolean;
+  setPaused: (p: boolean) => void;
+  stage: string;
+}) {
+  return (
+    <div className="flex flex-wrap items-center gap-3 rounded border border-rose-900/50 bg-rose-950/20 p-3 text-xs">
+      <span className="font-medium text-rose-200">SetPaused (authority only)</span>
+      <button
+        onClick={() => setPaused(true)}
+        disabled={stage !== "idle"}
+        className="rounded-lg bg-rose-700 px-3 py-1.5 font-medium text-white hover:bg-rose-600 disabled:opacity-50"
+      >
+        {stage === "pause" ? "pausing..." : paused ? "(already paused)" : "Pause"}
+      </button>
+      <button
+        onClick={() => setPaused(false)}
+        disabled={stage !== "idle"}
+        className="rounded-lg bg-emerald-700 px-3 py-1.5 font-medium text-white hover:bg-emerald-600 disabled:opacity-50"
+      >
+        {stage === "unpause" ? "unpausing..." : "Resume"}
+      </button>
+      <span className="text-slate-400">
+        Halts SwapRequest / ClearBatch / AddLiquidity until resumed.
+      </span>
+    </div>
+  );
+}

@@ -2,7 +2,7 @@
 
 This document defines what ships to mainnet for v1, what is explicitly out of scope, and what the audit boundary is. Audit firms should bid against this document; the rest of the repo is research and ops scaffolding.
 
-Last updated: 2026-04-26
+Last updated: 2026-04-30
 
 ---
 
@@ -10,10 +10,10 @@ Last updated: 2026-04-26
 
 Mainnet v1 ships **two Solana programs**:
 
-| Program | Devnet ID (canonical / Muse) | Lines of code (approx) | Audit priority |
-|---|---|---|---|
-| `pfda-amm-3` | `DbAPmgkrpCCZrpBMv5x1ye6nJUreqY313SuQjZsMyjEf` | ~2,400 | P0 |
-| `axis-vault` | `DeeUnCHcnPG8arbjGTLhTKeDhpPUBper3TDrpFPHnCwy` | ~2,100 | P0 |
+| Program | Mainnet status | Mainnet ID | Lines of code (approx) | Audit priority |
+|---|---|---|---|---|
+| `pfda-amm-3` | pre-deploy | (TBD; devnet `3SBbfZgzAHyaijxbUbxBLt89aX6Z2d4ptL5PH6pzMazV`) | ~2,400 | P0 |
+| `axis-vault` | **live, OtterSec-verified** (2026-04-29) | `Agae3WetHx7J9CE7nP927ekzAeegSKE1KfkZDMYLDGHX` | ~2,100 | P0 |
 
 Built with [Pinocchio](https://github.com/anza-xyz/pinocchio), `no_std`, no Anchor.
 
@@ -113,19 +113,13 @@ The Python/Rust simulation harness that generates the LVR P&L tables in `README.
 
 **Why deferring is safe.** axis-g3m doesn't ship to mainnet in v1, so the broken disc=4 path is unreachable.
 
-### D2. `PROTOCOL_TREASURY` Squads V4 multisig flip
+### ~~D2. `PROTOCOL_TREASURY` Squads V4 multisig flip~~ — DONE 2026-04-29
 
-**Status.** Constant in `contracts/axis-vault/src/constants.rs:53` is currently `[0u8; 32]`. The CreateEtf governance gate is inert until the constant is non-zero, by design (devnet tests use throwaway treasuries). On mainnet it MUST be flipped to the deployed Squads V4 multisig vault key before any user-visible ETF can be created.
+**Status (2026-04-29).** Shipped. `contracts/axis-vault/src/constants.rs:73-78` now holds the Squads V4 vault key `BtjuCMkLC9MuzagvGSS9E26XjMNTBR6isj8e1xVyeak6`; `protocol_treasury_is_active()` returns true; `CreateEtf` enforces `treasury == PROTOCOL_TREASURY` per `instructions/create_etf.rs:103-110`. Verified by `bun test/frontend/programs.test.ts` (canonical-treasury assertions) and by the on-chain `axis-vault` upgrade landed at slot 416463163 (deploy sig `2TBxw…vsMHBY` for the original deploy; redeployed under the same Squads vault as part of the verifiable-build flow — see "Deployment artifacts" below).
 
-**Path.** Strictly follow [`docs/ops/SQUADS_RUNBOOK.md`](../ops/SQUADS_RUNBOOK.md). Two-of-two between two named signers. Order is sacred: provision devnet vault → smoke test → provision mainnet vault → flip constant in a one-line PR (both review) → deploy via Squads upgrade tx → on-chain verification.
+### ~~D3. Upgrade-authority handoff to Squads multisig~~ — DONE 2026-04-29
 
-**Why deferring is acceptable for audit.** The audit can review the gate logic + the runbook independently. The constant flip itself is a one-byte-array-replacement, not a code change worth re-auditing.
-
-### D3. Upgrade-authority handoff to Squads multisig
-
-**Status.** Mainnet program upgrade authority for both `pfda-amm-3` and `axis-vault` will start as the deploying single keypair, then transfer to the Squads V4 multisig once D2 is complete. This is not yet done because the canonical mainnet IDs aren't deployed yet (kidney's devnet test environment uses fresh IDs at `Agae3Wet…` / `3SBbfZgz…` per `.env.devnet.kidney`).
-
-**Path.** After mainnet first deploy: `solana program set-upgrade-authority <pid> --new-upgrade-authority <SQUADS_VAULT> -u mainnet-beta`. Document the post-handoff state in `docs/ops/MAINNET_DEPLOY_LOG.md` (to be created on launch day).
+**Status (2026-04-29).** Shipped. Mainnet upgrade authority for `axis-vault` (`Agae3Wet…YLDGHX`) is the Squads V4 vault `BtjuCMkLC9MuzagvGSS9E26XjMNTBR6isj8e1xVyeak6`; verified via `solana program show … -u mainnet-beta`. `pfda-amm-3` is still pre-deploy on mainnet — its handoff stays nominally deferred until the first mainnet deploy lands, at which point the same Squads vault adopts upgrade authority.
 
 ### D4. 24–72h upgrade timelock
 
@@ -137,11 +131,11 @@ The Python/Rust simulation harness that generates the LVR P&L tables in `README.
 
 ### D5. Codama IDL + on-chain event emission
 
-**Status.** Pinocchio doesn't auto-generate Anchor-style IDL; current TypeScript clients hand-roll instruction-data layouts. Programs do not emit `msg!`/`log_data` events for indexers — only `set_return_data` for `CheckDrift`, `Swap`, `Rebalance`.
+**Status (2026-04-30).** Partial. A hand-rolled `axis.manual-idl.v1` for `axis-vault` ships at `idl/axis_vault.json` covering all 9 instructions, the 536-byte `EtfState` layout (with explicit alignment padding and offsets), the 9000-block error variants, the deploy artifacts (program ID, programData PDA, slot, signature, sbf SHA-256, upgrade authority, protocol treasury), and the relevant constants. External integrators have a versioned schema to read against. Codama codegen + on-chain event emission (`msg!` / `log_data` per ix) are still deferred.
 
-**Path.** Author Codama specs in `idl/*.codama.json`, generate TS clients into `clients/ts/src/generated/`. Define event schema in `docs/architecture/events.md` (`EVT:` prefix + base64 payload), implement via `pinocchio::msg!` in each ix.
+**Path.** Author Codama specs (the manual IDL is the seed for these), generate TS clients into `clients/ts/src/generated/`. Define event schema in `docs/architecture/events.md` (`EVT:` prefix + base64 payload), implement via `pinocchio::msg!` in each ix.
 
-**v1 mitigation.** Hand-rolled clients used in `test/e2e/*` are tested against the actual programs in CI. Indexers can reconstruct state from account diffs (slow but functional).
+**v1 mitigation.** Hand-rolled clients used in `test/e2e/*` and `frontend/src/lib/ix.ts` are tested against the deployed programs in CI; the manual IDL keeps schema drift visible. Indexers can reconstruct state from account diffs (slow but functional).
 
 ### D6. State versioning byte
 
@@ -166,13 +160,14 @@ These are known, documented, and accepted for v1 launch. Each has a mitigation; 
 | # | Risk | Mitigation |
 |---|---|---|
 | R1 | No third-party security audit at launch | Audit booked before TVL exceeds $100k. Closed-beta ramp via TVL cap (`SetCap`) limits exposure during pre-audit window. |
-| R2 | Single-EOA upgrade authority at first deploy | Transferred to Squads V4 multisig within 24h of deploy (D3) |
+| ~~R2~~ | ~~Single-EOA upgrade authority at first deploy~~ | **Resolved 2026-04-29.** `axis-vault` upgrade authority is the Squads V4 vault `BtjuCMkLC9MuzagvGSS9E26XjMNTBR6isj8e1xVyeak6`. `pfda-amm-3` will start under the same Squads vault on its first mainnet deploy. |
 | R3 | No on-chain timelock on upgrades | Squads 2-of-2 + hardware wallets; v1.1 adds timelock (D4) |
 | R4 | ETF mint has `freeze_authority = None` | Intentional trust-minimization decision. ETF holders cannot have their tokens frozen; the protocol cannot recover funds for compromised users. Disclosed in user-facing docs. |
 | R5 | No Pyth oracle redundancy on `pfda-amm-3` | Only Switchboard. Strict-mode rejects on any stale feed. The pool freezes during a Switchboard outage, but no funds are lost. v1.1 adds Pyth fallback. |
 | R6 | No automated bug-bounty program at launch | `SECURITY.md` will publish a `security@` email and severity-based reward table. Immunefi listing planned post-audit. |
 | R7 | No event emission for indexers | Indexers reconstruct state from account diffs. v1.1 adds `EVT:` prefix log_data (D5). |
-| R8 | Hand-rolled TS instruction encoders | Tested against the deployed programs in CI; sloppy clients fail integration tests before merge. v1.1 adds Codama (D5). |
+| R8 | Hand-rolled TS instruction encoders | Tested against the deployed programs in CI; sloppy clients fail integration tests before merge. The manual IDL at `idl/axis_vault.json` documents the layout; Codama codegen still v1.1 (D5). |
+| R9 | Frontend client-side Jupiter composition (Deposit-SOL/Withdraw-SOL flows) instead of on-chain `DepositSol`/`WithdrawSol` CPI | The on-chain disc=5/6 paths are audit-in-scope but currently unused by the deployed UI; the UI bundles Jupiter `swap-instructions` ixs and an axis `Deposit`/`Withdraw` ix into one (or two, on overflow) versioned tx. Sidesteps the CPI account-layout concern in D1 while preserving slippage guards (`min_mint_out`, `min_tokens_out`, `MIN_FIRST_DEPOSIT_BASE`). |
 
 ---
 
@@ -224,38 +219,64 @@ The program author DOES NOT trust:
 
 ---
 
-## Deployment artifacts (mainnet launch day)
+## Deployment artifacts
 
-To be filled in on launch day. Template below.
+### `axis-vault` — live on mainnet-beta
 
 ```
-─── Mainnet deploy ──────────────────────────────────────────
-Date:               2026-XX-XX
-Deploying wallet:   [TBD]
-Audit firm + link:  [TBD]
+─── Mainnet deploy (axis-vault) ─────────────────────────────
+Original deploy:      2026-02-… (slot 416272971,
+                      sig 2TBxweDiUk96FAY9hmmPD9cEPcT6NUAsZEbEkvvWQiNLagukYfni7TyZzh3u5CdEHPk9f3Jb9DRbLt6R6wvsMHBY)
+Verifiable redeploy:  2026-04-29 (slot 416463163; the
+                      original .so was built outside docker so
+                      its normalized hash diverged from any
+                      reproducible build — redeployed the
+                      `solanafoundation/solana-verifiable-build:3.0.14`
+                      output via Squads to clear OtterSec's
+                      hash check; rent-cycle through buffer
+                      `GLapRTYhvTs4gFdnaXVadsZi23pSL49Sa1vBeBcgyyWD`)
+Deploying wallet:     6pZuwgM4ZyzWjtjMSGap5Zw4GCUo3q7RxFPsFxSLao5o
+                      (single-sig prep only; no upgrade authority)
+Audit firm + link:    [TBD — booked before TVL > $100k per R1]
 
-Program: pfda-amm-3
-  Program ID:       [TBD]
-  Deploy tx:        [TBD]
-  .so SHA-256:      [TBD]
-  .so size:         [TBD] bytes
-  Initial upgrade authority: [deploying wallet]
-  Final upgrade authority:   [Squads vault, after D3]
-
-Program: axis-vault
-  Program ID:       [TBD]
-  Deploy tx:        [TBD]
-  .so SHA-256:      [TBD]
-  .so size:         [TBD] bytes
-  Initial upgrade authority: [deploying wallet]
-  Final upgrade authority:   [Squads vault, after D3]
-
-PROTOCOL_TREASURY constant: [Squads V4 vault key, post-D2]
-First ETF created at:       [TBD]
+  Program ID:                Agae3WetHx7J9CE7nP927ekzAeegSKE1KfkZDMYLDGHX
+  ProgramData PDA:           6szAV5iFQKzJ7BuYZipSeWc3thauWCVi9q26k1WQEjrt
+  Upgrade authority:         BtjuCMkLC9MuzagvGSS9E26XjMNTBR6isj8e1xVyeak6  (Squads V4 vault, 2-of-2)
+  PROTOCOL_TREASURY:         BtjuCMkLC9MuzagvGSS9E26XjMNTBR6isj8e1xVyeak6  (same vault; CreateEtf gate active)
+  .so size:                  104,656 bytes
+  .so raw SHA-256:           e7911f5da477e2416bfe0265312ec94ffe74d82233a16a0f963644af9b4e9c0a
+  solana-verify hash:        0253e0316161f40608fdcd5ba325db4b600956f83dd6547c02ef7ae827a5af53
+  OtterSec verifier:         is_verified: true (job 6d37f26d-18bf-4141-b808-933de3230599)
+  OtterSec status URL:       https://verify.osec.io/status/Agae3WetHx7J9CE7nP927ekzAeegSKE1KfkZDMYLDGHX
+  Verify-PDA:                HQpeRmsFC7U7EfuQgrssGuvZ9e5WetsaYkGqoZ2R3XwT
+  Source repo + commit:      https://github.com/Axis-pizza/Axis_AMM @ f400d88e236f7c145c6389025058564c3ed0f457
 ─────────────────────────────────────────────────────────────
 ```
 
-This block lives in `docs/ops/MAINNET_DEPLOY_LOG.md` and is part of the public record.
+### `pfda-amm-3` — pre-deploy
+
+```
+─── Mainnet deploy (pfda-amm-3) ─────────────────────────────
+Status:               not yet deployed to mainnet-beta
+                      (devnet ID 3SBbfZgzAHyaijxbUbxBLt89aX6Z2d4ptL5PH6pzMazV
+                       per `frontend/src/lib/programs.ts`).
+Pre-deploy checklist:
+  1. Build with `solana-verify build --base-image
+     solanafoundation/solana-verifiable-build:3.0.14
+     contracts/pfda-amm-3` so the deploy hash matches what
+     OtterSec will rebuild later.
+  2. `solana program write-buffer` from a deploy keypair, then
+     `set-buffer-authority` to the Squads vault.
+  3. Squads multisig (2-of-2) executes deploy with the buffer.
+  4. Run `scripts/ops/verify-build.sh PROGRAM_ID=<new-id>`
+     and confirm PASS.
+  5. `solana-verify export-pda-tx` → Squads Custom TX → 2-of-2
+     execute → `solana-verify remote submit-job`. Reflect in
+     this doc + `idl/pfda_amm_3.json`.
+─────────────────────────────────────────────────────────────
+```
+
+The full Squads-multisig flow (write-buffer, upgrade, verify-PDA export, OtterSec submit-job) is documented step-by-step in [`docs/ops/SOLSCAN_VERIFY_RUNBOOK.md`](../ops/SOLSCAN_VERIFY_RUNBOOK.md).
 
 ---
 

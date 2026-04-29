@@ -12,7 +12,7 @@ import { getClusterConfig, type Cluster, type ClusterConfig } from "./lib/progra
 import { fetchWalletTokens } from "./lib/tokens";
 
 export default function App() {
-  const [cluster, setCluster] = useState<Cluster>("devnet");
+  const [cluster, setCluster] = useState<Cluster>("mainnet");
   const config = getClusterConfig(cluster);
 
   return (

@@ -98,6 +98,68 @@ export function InitPoolForm({
   );
 }
 
+export function JupiterSolSeedForm({
+  title,
+  hint,
+  solAmount,
+  setSolAmount,
+  slippageBps,
+  setSlippageBps,
+  onRun,
+  runLabel,
+  busy,
+  disabled,
+}: {
+  title: string;
+  hint: string;
+  solAmount: number;
+  setSolAmount: (n: number) => void;
+  slippageBps: number;
+  setSlippageBps: (n: number) => void;
+  onRun: () => void;
+  runLabel: string;
+  busy: boolean;
+  disabled: boolean;
+}) {
+  return (
+    <div className="rounded border border-sky-900/60 bg-sky-950/20 p-3">
+      <p className="mb-1 text-xs font-medium text-sky-200">{title}</p>
+      <p className="mb-2 text-[11px] text-slate-400">{hint}</p>
+      <div className="flex flex-wrap items-end gap-3 text-xs">
+        <label className="flex flex-col">
+          <span className="mb-1 text-slate-400">SOL spend</span>
+          <input
+            type="number"
+            min={0.001}
+            step={0.001}
+            value={solAmount}
+            onChange={(e) => setSolAmount(Number(e.target.value))}
+            className="w-28 rounded bg-slate-800 px-2 py-1 font-mono text-slate-100"
+          />
+        </label>
+        <label className="flex flex-col">
+          <span className="mb-1 text-slate-400">slippage (bps)</span>
+          <input
+            type="number"
+            min={1}
+            max={500}
+            value={slippageBps}
+            onChange={(e) => setSlippageBps(Number(e.target.value))}
+            className="w-20 rounded bg-slate-800 px-2 py-1 font-mono text-slate-100"
+          />
+        </label>
+        <button
+          onClick={onRun}
+          disabled={disabled || solAmount <= 0}
+          className="rounded-lg bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-500 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {busy ? "swapping…" : runLabel}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export function AddLiquidityForm({
   liquidityUi,
   setLiquidityUi,

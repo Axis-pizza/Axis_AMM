@@ -466,6 +466,62 @@ export function ixWithdrawFees3(args: WithdrawFees3Args): TransactionInstruction
   });
 }
 
+export interface CloseBatchHistory3Args {
+  programId: PublicKey;
+  /// Must be the pool authority — the program rejects any other signer
+  /// to prevent rent siphoning by whoever wins the close-delay race.
+  rentRecipient: PublicKey;
+  pool: PublicKey;
+  history: PublicKey;
+}
+
+/// CloseBatchHistory (disc=7) — reclaim rent from a ClearedBatchHistory3
+/// PDA after `current_batch_id ≥ history.batch_id + 100` (CLOSE_DELAY).
+/// Rent goes to `rentRecipient`, which the program asserts equals
+/// `pool.authority`.
+export function ixCloseBatchHistory3(
+  args: CloseBatchHistory3Args,
+): TransactionInstruction {
+  return new TransactionInstruction({
+    programId: args.programId,
+    keys: [
+      { pubkey: args.rentRecipient, isSigner: true, isWritable: true },
+      { pubkey: args.pool, isSigner: false, isWritable: false },
+      { pubkey: args.history, isSigner: false, isWritable: true },
+    ],
+    data: Buffer.from([7]),
+  });
+}
+
+export interface CloseExpiredTicket3Args {
+  programId: PublicKey;
+  /// Anyone can crank — the rent itself returns to `rentRecipient`,
+  /// which the program asserts equals `ticket.owner`.
+  caller: PublicKey;
+  pool: PublicKey;
+  ticket: PublicKey;
+  rentRecipient: PublicKey;
+}
+
+/// CloseExpiredTicket (disc=8) — reclaim rent from an unclaimed
+/// UserOrderTicket3 after `current_batch_id ≥ ticket.batch_id + 200`
+/// (TICKET_EXPIRY_BATCHES). Anyone can sign; rent goes to the original
+/// ticket owner.
+export function ixCloseExpiredTicket3(
+  args: CloseExpiredTicket3Args,
+): TransactionInstruction {
+  return new TransactionInstruction({
+    programId: args.programId,
+    keys: [
+      { pubkey: args.caller, isSigner: true, isWritable: true },
+      { pubkey: args.pool, isSigner: false, isWritable: false },
+      { pubkey: args.ticket, isSigner: false, isWritable: true },
+      { pubkey: args.rentRecipient, isSigner: false, isWritable: true },
+    ],
+    data: Buffer.from([8]),
+  });
+}
+
 export interface SetPaused3Args {
   programId: PublicKey;
   authority: PublicKey;

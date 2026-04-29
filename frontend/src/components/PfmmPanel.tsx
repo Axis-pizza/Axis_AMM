@@ -19,13 +19,16 @@ import {
   ixWithdrawFees3,
 } from "../lib/ix";
 import { buildBareTokenAccountIxs } from "../lib/spl";
-import { sendTx, explorerTx } from "../lib/tx";
+import { sendTx, sendVersionedTx, explorerTx } from "../lib/tx";
 import type { ClusterConfig } from "../lib/programs";
 import { truncatePubkey } from "../lib/format";
+import { fetchPoolState3, type PoolState3Data } from "../lib/pfmmState";
+import { buildJupiterSolSeedPlan } from "../lib/pfmmSeedPlan";
 import {
   AddLiquidityForm,
   ClearClaimButtons,
   InitPoolForm,
+  JupiterSolSeedForm,
   PausedToggle,
   PoolStatus,
   SwapRequestForm,
@@ -33,18 +36,28 @@ import {
   type PoolView,
 } from "./PfmmControls";
 
-// Pool layout: window_end is at offset 256 (per pfda-amm-3.local.e2e.ts:263).
-const POOL_OFFSET_WINDOW_END = 256;
-
 /// Pfmm interaction panel.
 ///
-/// Exact e2e mirror flow: pick 3 mints (order-sensitive — pool PDA is
+/// Mirrors the e2e flow: pick 3 mints (order-sensitive — pool PDA is
 /// keyed by [mint0, mint1, mint2] in selection order) → InitializePool
 /// (with bare vault accounts) → AddLiquidity → SwapRequest →
 /// wait for window → ClearBatch → Claim.
 ///
-/// Each button maps to one tx so the user can see progress and so we
-/// don't blow the 1232-byte tx-size cap on the larger composites.
+/// Vaults and batch ids are read from on-chain pool state once it
+/// exists, so the panel survives a page reload (an earlier demo build
+/// kept them only in React state). The vault keypairs we generate inside
+/// InitPool are used only as part of that one tx; subsequent reads come
+/// straight from `PoolState3` at offsets we mirror in `lib/pfmmState.ts`.
+///
+/// On mainnet, two extra Jupiter SOL-seed flows are exposed so users
+/// arriving with only SOL can:
+///   • Fund AddLiquidity by buying the 3 basket tokens proportionally
+///     to the pool's weights, then call AddLiquidity.
+///   • Fund a SwapRequest by buying just the input-side token, then
+///     call SwapRequest.
+/// Each is a separate tx the wallet signs in sequence — split rather
+/// than bundled because Jupiter swap legs alone routinely flirt with
+/// the 1232-byte wire cap once a PFMM ix is added.
 export function PfmmPanel({
   selectedMints,
   walletDecimals,
@@ -68,15 +81,21 @@ export function PfmmPanel({
   const [feeAmount1Ui, setFeeAmount1Ui] = useState(0);
   const [feeAmount2Ui, setFeeAmount2Ui] = useState(0);
 
-  // We persist the pool's vault keypairs locally because the pool
-  // doesn't store them in its account data and InitPool / AddLiquidity
-  // / Claim all need them. In production they'd be deterministic ATAs
-  // owned by the pool PDA — for the demo we keep a Map<poolPk → vaults>.
-  const [vaultsByPool, setVaultsByPool] = useState<
-    Record<string, [string, string, string]>
-  >({});
+  // Jupiter seed UI state — both flows share slippage but keep their
+  // SOL inputs separate so the user doesn't have to re-enter when
+  // toggling between AddLiquidity and SwapRequest.
+  const [seedSolForLiq, setSeedSolForLiq] = useState(0.05);
+  const [seedSolForSwap, setSeedSolForSwap] = useState(0.01);
+  const [jupiterSlippageBps, setJupiterSlippageBps] = useState(50);
 
-  const [pool, setPool] = useState<PoolView | null>(null);
+  // Vault keypairs for the in-flight InitPool tx. Cleared after the
+  // pool fetch returns the on-chain values.
+  const [pendingInitVaults, setPendingInitVaults] = useState<
+    [PublicKey, PublicKey, PublicKey] | null
+  >(null);
+
+  const [pool, setPool] = useState<PoolState3Data | null>(null);
+  const [poolMissing, setPoolMissing] = useState<boolean>(false);
   const [stage, setStage] = useState<string>("idle");
   const [log, setLog] = useState<string[]>([]);
   const [currentSlot, setCurrentSlot] = useState<bigint | null>(null);
@@ -90,23 +109,30 @@ export function PfmmPanel({
   useEffect(() => {
     if (selectedMints.length !== 3 || !publicKey) {
       setPool(null);
+      setPoolMissing(false);
       return;
     }
     const m = selectedMints.map((s) => new PublicKey(s)) as [PublicKey, PublicKey, PublicKey];
     const [poolPk] = findPool3(pfmm, m[0], m[1], m[2]);
     let cancelled = false;
     void (async () => {
-      const info = await connection.getAccountInfo(poolPk);
-      if (cancelled) return;
-      if (!info) {
-        setPool({ exists: false, pool: poolPk });
-      } else {
-        const data = info.data;
-        const windowEnd = data.readBigUInt64LE(POOL_OFFSET_WINDOW_END);
-        // Pool layout offset for `current_batch_id` is not asserted in the
-        // e2e suite; we display windowEnd only and infer batch progression
-        // from queue3 PDAs.
-        setPool({ exists: true, pool: poolPk, windowEnd });
+      try {
+        const data = await fetchPoolState3(connection, poolPk);
+        if (cancelled) return;
+        if (data) {
+          setPool(data);
+          setPoolMissing(false);
+        } else {
+          setPool(null);
+          setPoolMissing(true);
+        }
+      } catch (e) {
+        if (cancelled) return;
+        setPool(null);
+        setPoolMissing(true);
+        pushLog(
+          `pool fetch failed: ${e instanceof Error ? e.message : String(e)}`,
+        );
       }
     })();
     return () => {
@@ -137,6 +163,15 @@ export function PfmmPanel({
     return BigInt(Math.round(ui * 10 ** dec(mint)));
   }
 
+  async function refreshPool(poolPk: PublicKey) {
+    const data = await fetchPoolState3(connection, poolPk);
+    if (data) {
+      setPool(data);
+      setPoolMissing(false);
+      setPendingInitVaults(null);
+    }
+  }
+
   async function initPool() {
     if (!publicKey || selectedMints.length !== 3) return;
     setStage("init");
@@ -151,6 +186,7 @@ export function PfmmPanel({
       pushLog(
         `Vaults: ${vaults.pubkeys.map((v) => truncatePubkey(v.toBase58())).join(", ")}`,
       );
+      setPendingInitVaults(vaults.pubkeys as [PublicKey, PublicKey, PublicKey]);
 
       const initIx = ixInitPool3({
         programId: pfmm,
@@ -171,21 +207,7 @@ export function PfmmPanel({
         vaults.signers,
       );
       pushLog(`✓ init_pool: ${sig.slice(0, 12)}…  → ${explorerTx(sig, config.explorerCluster)}`);
-      // Persist vault pubkeys for follow-up txs in this session.
-      setVaultsByPool((cur) => ({
-        ...cur,
-        [poolPk.toBase58()]: vaults.pubkeys.map((v) => v.toBase58()) as [
-          string,
-          string,
-          string,
-        ],
-      }));
-      // Force pool refresh
-      const info = await connection.getAccountInfo(poolPk);
-      if (info) {
-        const windowEnd = info.data.readBigUInt64LE(POOL_OFFSET_WINDOW_END);
-        setPool({ exists: true, pool: poolPk, windowEnd });
-      }
+      await refreshPool(poolPk);
       setStage("idle");
     } catch (e) {
       setStage("err");
@@ -193,38 +215,88 @@ export function PfmmPanel({
     }
   }
 
-  function getVaults(poolPk: PublicKey): [PublicKey, PublicKey, PublicKey] | null {
-    const stored = vaultsByPool[poolPk.toBase58()];
-    if (!stored) return null;
-    return stored.map((s) => new PublicKey(s)) as [PublicKey, PublicKey, PublicKey];
+  /// Resolve the vaults to use for an op. Pool-on-chain wins; falls back
+  /// to the freshly-allocated keypairs from a just-issued InitPool tx
+  /// that hasn't surfaced in our pool state read yet.
+  function getVaults(): [PublicKey, PublicKey, PublicKey] | null {
+    if (pool) return pool.vaults;
+    return pendingInitVaults;
   }
 
   async function addLiquidity() {
-    if (!publicKey || !pool?.exists) return;
-    const vaults = getVaults(pool.pool);
-    if (!vaults) {
-      pushLog("✗ vault pubkeys missing — InitPool from this session, or paste them");
-      return;
-    }
+    if (!publicKey || !pool) return;
     setStage("addLiq");
     try {
-      const m = selectedMints.map((s) => new PublicKey(s)) as [PublicKey, PublicKey, PublicKey];
+      const m = pool.tokenMints;
       const userTokens = m.map((mint) =>
         getAssociatedTokenAddressSync(mint, publicKey),
       ) as [PublicKey, PublicKey, PublicKey];
-      const amounts = selectedMints.map((mintStr) =>
-        uiToBase(liquidityUi, mintStr),
+      const amounts = pool.tokenMints.map((mint) =>
+        uiToBase(liquidityUi, mint.toBase58()),
       ) as [bigint, bigint, bigint];
       const ix = ixAddLiquidity3({
         programId: pfmm,
         payer: publicKey,
         pool: pool.pool,
-        vaults,
+        vaults: pool.vaults,
         userTokens,
         amounts,
       });
       const sig = await sendTx(connection, wallet, [ix]);
-      pushLog(`✓ add_liquidity: ${sig.slice(0, 12)}…  → ${explorerTx(sig, config.explorerCluster)}`);
+      pushLog(
+        `✓ add_liquidity: ${sig.slice(0, 12)}…  → ${explorerTx(sig, config.explorerCluster)}`,
+      );
+      await refreshPool(pool.pool);
+      setStage("idle");
+    } catch (e) {
+      setStage("err");
+      pushLog(`✗ ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
+  /// Buy the 3 basket tokens with SOL, weighted to match the pool's
+  /// on-chain `weights`. The bps used here come straight from the pool
+  /// (converted from the program's u32 micro-units), so subsequent
+  /// AddLiquidity can be executed with whatever balances actually land.
+  async function seedFromSolForAddLiquidity() {
+    if (!publicKey || !pool) return;
+    setStage("seedLiq");
+    try {
+      const microSum = pool.weights.reduce((a, b) => a + b, 0);
+      if (microSum === 0) {
+        throw new Error("pool weights sum to zero — corrupt state?");
+      }
+      // Convert micro-units (sum 1_000_000) → bps (sum 10_000) and pin
+      // any rounding drift to the last leg so the bps still sum exactly.
+      const partial = pool.weights
+        .slice(0, -1)
+        .map((w) => Math.floor((w * 10_000) / microSum));
+      const last = 10_000 - partial.reduce((a, b) => a + b, 0);
+      const bpsWeights = [...partial, last];
+      const solIn = BigInt(Math.floor(seedSolForLiq * 1_000_000_000));
+      pushLog(
+        `Jupiter SOL → basket: ${seedSolForLiq} SOL split ${bpsWeights.join("/")} bps; slippage ${jupiterSlippageBps} bps`,
+      );
+      const plan = await buildJupiterSolSeedPlan({
+        conn: connection,
+        user: publicKey,
+        outputMints: [...pool.tokenMints],
+        weights: bpsWeights,
+        solIn,
+        slippageBps: jupiterSlippageBps,
+      });
+      pushLog(
+        `tx ${plan.txBytes}/1232 b · ${plan.ixCount} ix · CU ${plan.computeUnitLimit} @ ${plan.computeUnitPrice} μL/CU`,
+      );
+      for (const leg of plan.legs) {
+        pushLog(
+          `  ${truncatePubkey(leg.mint.toBase58(), 4, 4)}: ${(Number(leg.solLamports) / 1e9).toFixed(6)} SOL → ${leg.expectedOut.toString()} (min ${leg.minOut.toString()}) · ${leg.routeLabel}`,
+        );
+      }
+      const sig = await sendVersionedTx(connection, wallet, plan.versionedTx);
+      pushLog(
+        `✓ jupiter_seed (basket): ${sig.slice(0, 12)}…  → ${explorerTx(sig, config.explorerCluster)}`,
+      );
       setStage("idle");
     } catch (e) {
       setStage("err");
@@ -233,33 +305,18 @@ export function PfmmPanel({
   }
 
   async function swapRequest() {
-    if (!publicKey || !pool?.exists) return;
-    const vaults = getVaults(pool.pool);
-    if (!vaults) {
-      pushLog("✗ vault pubkeys missing");
-      return;
-    }
+    if (!publicKey || !pool) return;
     if (swapInIdx === swapOutIdx) {
       pushLog("✗ in_idx == out_idx");
       return;
     }
     setStage("swap");
     try {
-      // Find current batch id by walking queue3 PDAs. For the demo,
-      // we keep a small counter — real apps would read it from pool state.
-      let batchId = 0n;
-      for (let i = 0; i < 16; i++) {
-        const [q] = findQueue3(pfmm, pool.pool, BigInt(i));
-        const info = await connection.getAccountInfo(q);
-        if (info) {
-          batchId = BigInt(i);
-          break;
-        }
-      }
-      pushLog(`Active batch detected: ${batchId}`);
+      const batchId = pool.currentBatchId;
+      pushLog(`Active batch: ${batchId}`);
       const [queue] = findQueue3(pfmm, pool.pool, batchId);
       const [ticket] = findTicket3(pfmm, pool.pool, publicKey, batchId);
-      const inMint = new PublicKey(selectedMints[swapInIdx]);
+      const inMint = pool.tokenMints[swapInIdx];
       const userTokenIn = getAssociatedTokenAddressSync(inMint, publicKey);
       const ix = ixSwapRequest3({
         programId: pfmm,
@@ -268,10 +325,10 @@ export function PfmmPanel({
         queue,
         ticket,
         userTokenIn,
-        vaultIn: vaults[swapInIdx],
+        vaultIn: pool.vaults[swapInIdx],
         inIdx: swapInIdx,
         outIdx: swapOutIdx,
-        amountIn: uiToBase(swapAmountUi, selectedMints[swapInIdx]),
+        amountIn: uiToBase(swapAmountUi, inMint.toBase58()),
         minOut: 0n,
       });
       const sig = await sendTx(connection, wallet, [ix]);
@@ -285,20 +342,51 @@ export function PfmmPanel({
     }
   }
 
+  /// Buy the swap-input mint with SOL via Jupiter. After it lands, the
+  /// user can run SwapRequest with their fresh balance. Two txs (Jupiter
+  /// swap, then PFMM SwapRequest) — bundling is unsafe because Jupiter's
+  /// quoted output isn't known at SwapRequest build time without a
+  /// post-confirmation balance read.
+  async function seedFromSolForSwap() {
+    if (!publicKey || !pool) return;
+    setStage("seedSwap");
+    try {
+      const inMint = pool.tokenMints[swapInIdx];
+      const solIn = BigInt(Math.floor(seedSolForSwap * 1_000_000_000));
+      pushLog(
+        `Jupiter SOL → ${truncatePubkey(inMint.toBase58(), 4, 4)} (input idx ${swapInIdx}): ${seedSolForSwap} SOL; slippage ${jupiterSlippageBps} bps`,
+      );
+      const plan = await buildJupiterSolSeedPlan({
+        conn: connection,
+        user: publicKey,
+        outputMints: [inMint],
+        weights: [10_000],
+        solIn,
+        slippageBps: jupiterSlippageBps,
+      });
+      pushLog(
+        `tx ${plan.txBytes}/1232 b · ${plan.ixCount} ix · CU ${plan.computeUnitLimit} @ ${plan.computeUnitPrice} μL/CU`,
+      );
+      const leg = plan.legs[0];
+      pushLog(
+        `  expected out: ${leg.expectedOut.toString()} (min ${leg.minOut.toString()}) · ${leg.routeLabel}`,
+      );
+      const sig = await sendVersionedTx(connection, wallet, plan.versionedTx);
+      pushLog(
+        `✓ jupiter_seed (swap input): ${sig.slice(0, 12)}…  → ${explorerTx(sig, config.explorerCluster)}`,
+      );
+      setStage("idle");
+    } catch (e) {
+      setStage("err");
+      pushLog(`✗ ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
   async function clearBatch() {
-    if (!publicKey || !pool?.exists) return;
+    if (!publicKey || !pool) return;
     setStage("clear");
     try {
-      // Detect active batch — same scan as swap.
-      let batchId = 0n;
-      for (let i = 0; i < 16; i++) {
-        const [q] = findQueue3(pfmm, pool.pool, BigInt(i));
-        const info = await connection.getAccountInfo(q);
-        if (info) {
-          batchId = BigInt(i);
-          break;
-        }
-      }
+      const batchId = pool.currentBatchId;
       const [queue] = findQueue3(pfmm, pool.pool, batchId);
       const [history] = findHistory3(pfmm, pool.pool, batchId);
       const [nextQueue] = findQueue3(pfmm, pool.pool, batchId + 1n);
@@ -314,6 +402,7 @@ export function PfmmPanel({
       pushLog(
         `✓ clear_batch batch=${batchId}: ${sig.slice(0, 12)}…  → ${explorerTx(sig, config.explorerCluster)}`,
       );
+      await refreshPool(pool.pool);
       setStage("idle");
     } catch (e) {
       setStage("err");
@@ -322,24 +411,16 @@ export function PfmmPanel({
   }
 
   async function withdrawFees() {
-    if (!publicKey || !pool?.exists) return;
-    const vaults = getVaults(pool.pool);
-    if (!vaults) {
-      pushLog("✗ vault pubkeys missing");
-      return;
-    }
+    if (!publicKey || !pool) return;
     setStage("withdrawFees");
     try {
-      // Treasury was set to `publicKey` at InitPool (see initPool above
-      // for the demo wiring); on mainnet the runbook flips this to the
-      // Squads vault. Treasury per-mint ATAs are derived deterministically
-      // and created idempotently here so the on-chain Transfer doesn't
-      // fail on a missing destination.
-      const treasury = publicKey;
-      const m = selectedMints.map((s) => new PublicKey(s)) as [PublicKey, PublicKey, PublicKey];
+      const treasury = pool.treasury;
+      const m = pool.tokenMints;
       const treasuryTokens = m.map((mint) =>
-        getAssociatedTokenAddressSync(mint, treasury),
+        getAssociatedTokenAddressSync(mint, treasury, true),
       ) as [PublicKey, PublicKey, PublicKey];
+      // Idempotent ATA creates so the on-chain Transfer doesn't fail on
+      // a missing destination if the treasury hasn't been touched yet.
       const ataIxs = m.map((mint, i) =>
         createAssociatedTokenAccountIdempotentInstruction(
           publicKey,
@@ -349,15 +430,15 @@ export function PfmmPanel({
         ),
       );
       const amounts = [
-        uiToBase(feeAmount0Ui, selectedMints[0]),
-        uiToBase(feeAmount1Ui, selectedMints[1]),
-        uiToBase(feeAmount2Ui, selectedMints[2]),
+        uiToBase(feeAmount0Ui, pool.tokenMints[0].toBase58()),
+        uiToBase(feeAmount1Ui, pool.tokenMints[1].toBase58()),
+        uiToBase(feeAmount2Ui, pool.tokenMints[2].toBase58()),
       ] as [bigint, bigint, bigint];
       const ix = ixWithdrawFees3({
         programId: pfmm,
         authority: publicKey,
         pool: pool.pool,
-        vaults,
+        vaults: pool.vaults,
         treasuryTokens,
         amounts,
       });
@@ -365,6 +446,7 @@ export function PfmmPanel({
       pushLog(
         `✓ withdraw_fees [${amounts.join(", ")}]: ${sig.slice(0, 12)}…  → ${explorerTx(sig, config.explorerCluster)}`,
       );
+      await refreshPool(pool.pool);
       setStage("idle");
     } catch (e) {
       setStage("err");
@@ -373,7 +455,7 @@ export function PfmmPanel({
   }
 
   async function setPaused(paused: boolean) {
-    if (!publicKey || !pool?.exists) return;
+    if (!publicKey || !pool) return;
     setStage(paused ? "pause" : "unpause");
     try {
       const ix = ixSetPaused3({
@@ -386,6 +468,7 @@ export function PfmmPanel({
       pushLog(
         `✓ set_paused(${paused}): ${sig.slice(0, 12)}…  → ${explorerTx(sig, config.explorerCluster)}`,
       );
+      await refreshPool(pool.pool);
       setStage("idle");
     } catch (e) {
       setStage("err");
@@ -394,37 +477,19 @@ export function PfmmPanel({
   }
 
   async function claim() {
-    if (!publicKey || !pool?.exists) return;
-    const vaults = getVaults(pool.pool);
-    if (!vaults) {
-      pushLog("✗ vault pubkeys missing");
-      return;
-    }
+    if (!publicKey || !pool) return;
     setStage("claim");
     try {
-      // Claim against the most recently CLEARED batch — that's batchId-1 of
-      // the active queue. Walk: find first non-existent queue, claim previous.
-      let batchId = 0n;
-      for (let i = 0; i < 16; i++) {
-        const [q] = findQueue3(pfmm, pool.pool, BigInt(i));
-        const info = await connection.getAccountInfo(q);
-        if (!info && i > 0) {
-          batchId = BigInt(i - 1);
-          break;
-        }
-        if (info) batchId = BigInt(i);
-      }
-      // Heuristic: the "claim batch" is the batch we already cleared, i.e.
-      // the active batch - 1, or 0 if only batch 0 exists post-clear.
-      // In practice the user will call clearBatch then claim immediately.
+      const batchId = pool.currentBatchId;
+      // Claim against the most recently CLEARED batch — that's batchId-1
+      // of the active queue, or 0 if we're still on batch 0.
       const claimBatch = batchId > 0n ? batchId - 1n : 0n;
       const [history] = findHistory3(pfmm, pool.pool, claimBatch);
       const [ticket] = findTicket3(pfmm, pool.pool, publicKey, claimBatch);
-      const m = selectedMints.map((s) => new PublicKey(s)) as [PublicKey, PublicKey, PublicKey];
+      const m = pool.tokenMints;
       const userTokens = m.map((mint) =>
         getAssociatedTokenAddressSync(mint, publicKey),
       ) as [PublicKey, PublicKey, PublicKey];
-      // Make sure ATAs exist (idempotent)
       const ataIxs = m.map((mint, i) =>
         createAssociatedTokenAccountIdempotentInstruction(
           publicKey,
@@ -439,7 +504,7 @@ export function PfmmPanel({
         pool: pool.pool,
         history,
         ticket,
-        vaults,
+        vaults: pool.vaults,
         userTokens,
       });
       const sig = await sendTx(connection, wallet, [...ataIxs, ix]);
@@ -455,11 +520,30 @@ export function PfmmPanel({
 
   const can3 = selectedMints.length === 3;
   const windowOpen =
-    pool?.windowEnd && currentSlot ? currentSlot < pool.windowEnd : false;
+    pool && currentSlot ? currentSlot < pool.currentWindowEnd : false;
   const slotsLeft =
-    pool?.windowEnd && currentSlot && currentSlot < pool.windowEnd
-      ? Number(pool.windowEnd - currentSlot)
+    pool && currentSlot && currentSlot < pool.currentWindowEnd
+      ? Number(pool.currentWindowEnd - currentSlot)
       : 0;
+
+  // PoolView shape that PfmmControls.PoolStatus expects.
+  const poolView: PoolView | null = pool
+    ? {
+        exists: true,
+        pool: pool.pool,
+        windowEnd: pool.currentWindowEnd,
+      }
+    : poolMissing && can3 && publicKey
+      ? (() => {
+          const m = selectedMints.map(
+            (s) => new PublicKey(s),
+          ) as [PublicKey, PublicKey, PublicKey];
+          return { exists: false, pool: findPool3(pfmm, m[0], m[1], m[2])[0] };
+        })()
+      : null;
+
+  const isAuthority =
+    publicKey !== null && pool !== null && pool.authority.equals(publicKey);
 
   return (
     <section className="rounded-xl border border-slate-800 bg-slate-900/40 p-6 shadow-sm">
@@ -480,14 +564,38 @@ export function PfmmPanel({
       ) : (
         <div className="space-y-4">
           <PoolStatus
-            pool={pool}
+            pool={poolView}
             currentSlot={currentSlot}
             windowOpen={windowOpen}
             slotsLeft={slotsLeft}
             explorerCluster={config.explorerCluster}
           />
 
-          {!pool?.exists && (
+          {pool && (
+            <div className="rounded bg-slate-950/40 p-3 text-[11px] text-slate-400">
+              <p>
+                Authority{" "}
+                <span className="font-mono text-slate-300">
+                  {truncatePubkey(pool.authority.toBase58(), 6, 6)}
+                </span>
+                {isAuthority && (
+                  <span className="ml-2 rounded bg-emerald-500/10 px-1.5 py-0.5 text-[10px] text-emerald-300">
+                    you
+                  </span>
+                )}
+                {" · "}fee {pool.baseFeeBps} bps · weights{" "}
+                {pool.weights.join("/")} · paused {String(pool.paused)}
+              </p>
+              <p>
+                Reserves{" "}
+                <span className="font-mono text-slate-300">
+                  {pool.reserves.map((r) => r.toString()).join(" / ")}
+                </span>
+              </p>
+            </div>
+          )}
+
+          {!pool && poolMissing && (
             <InitPoolForm
               feeBps={feeBps}
               setFeeBps={setFeeBps}
@@ -498,15 +606,43 @@ export function PfmmPanel({
             />
           )}
 
-          {pool?.exists && (
+          {pool && (
             <>
+              {config.jupiterEnabled && (
+                <JupiterSolSeedForm
+                  title="Jupiter SOL → basket (seed AddLiquidity)"
+                  hint="Buys the 3 basket tokens with SOL using the pool's on-chain weights, then lands them in your basket ATAs. Run AddLiquidity afterwards."
+                  solAmount={seedSolForLiq}
+                  setSolAmount={setSeedSolForLiq}
+                  slippageBps={jupiterSlippageBps}
+                  setSlippageBps={setJupiterSlippageBps}
+                  onRun={seedFromSolForAddLiquidity}
+                  runLabel="Buy basket"
+                  busy={stage === "seedLiq"}
+                  disabled={stage !== "idle"}
+                />
+              )}
               <AddLiquidityForm
                 liquidityUi={liquidityUi}
                 setLiquidityUi={setLiquidityUi}
                 addLiquidity={addLiquidity}
-                disabled={stage !== "idle" || !getVaults(pool.pool)}
+                disabled={stage !== "idle" || !getVaults()}
                 stage={stage}
               />
+              {config.jupiterEnabled && (
+                <JupiterSolSeedForm
+                  title={`Jupiter SOL → input mint (idx ${swapInIdx})`}
+                  hint="Buys just the swap-input token with SOL. Run SwapRequest afterwards with the resulting balance."
+                  solAmount={seedSolForSwap}
+                  setSolAmount={setSeedSolForSwap}
+                  slippageBps={jupiterSlippageBps}
+                  setSlippageBps={setJupiterSlippageBps}
+                  onRun={seedFromSolForSwap}
+                  runLabel="Buy input mint"
+                  busy={stage === "seedSwap"}
+                  disabled={stage !== "idle"}
+                />
+              )}
               <SwapRequestForm
                 swapInIdx={swapInIdx}
                 setSwapInIdx={setSwapInIdx}
@@ -523,18 +659,26 @@ export function PfmmPanel({
                 windowOpen={windowOpen}
                 stage={stage}
               />
-              <WithdrawFeesForm
-                amount0={feeAmount0Ui}
-                setAmount0={setFeeAmount0Ui}
-                amount1={feeAmount1Ui}
-                setAmount1={setFeeAmount1Ui}
-                amount2={feeAmount2Ui}
-                setAmount2={setFeeAmount2Ui}
-                withdrawFees={withdrawFees}
-                stage={stage}
-                disabled={!getVaults(pool.pool)}
-              />
-              <PausedToggle paused={false} setPaused={setPaused} stage={stage} />
+              {isAuthority && (
+                <>
+                  <WithdrawFeesForm
+                    amount0={feeAmount0Ui}
+                    setAmount0={setFeeAmount0Ui}
+                    amount1={feeAmount1Ui}
+                    setAmount1={setFeeAmount1Ui}
+                    amount2={feeAmount2Ui}
+                    setAmount2={setFeeAmount2Ui}
+                    withdrawFees={withdrawFees}
+                    stage={stage}
+                    disabled={false}
+                  />
+                  <PausedToggle
+                    paused={pool.paused}
+                    setPaused={setPaused}
+                    stage={stage}
+                  />
+                </>
+              )}
             </>
           )}
 

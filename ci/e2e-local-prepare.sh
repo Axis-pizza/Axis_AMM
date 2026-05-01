@@ -30,6 +30,22 @@ if [[ -f /tmp/solana-test-validator.pid ]]; then
   rm -f /tmp/solana-test-validator.pid
 fi
 
+# axis-vault v1.1 CreateEtf CPIs into Metaplex Token Metadata
+# (`metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s`). The bare local
+# validator doesn't ship Metaplex, so we dump the program from
+# mainnet once and load it via --bpf-program. We dump rather than
+# --clone-upgradeable-program because dumps are cacheable in the
+# CI runner's /tmp and don't add mainnet RPC dependency to every
+# validator restart.
+mpl_so_path=/tmp/mpl_token_metadata.so
+if [[ ! -s "${mpl_so_path}" ]]; then
+  echo "==> dumping Metaplex Token Metadata from mainnet → ${mpl_so_path}"
+  solana program dump \
+    -u https://api.mainnet-beta.solana.com \
+    metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s \
+    "${mpl_so_path}"
+fi
+
 solana-test-validator \
   --reset \
   --ledger /tmp/solana-ci-ledger \
@@ -37,6 +53,7 @@ solana-test-validator \
   --bpf-program DbAPmgkrpCCZrpBMv5x1ye6nJUreqY313SuQjZsMyjEf contracts/pfda-amm-3/target/deploy/pfda_amm_3.so \
   --bpf-program 65aE9QdVz5bapV19BGt5cyTgVitYpekGwusRoQEovNUi contracts/axis-g3m/target/deploy/axis_g3m.so \
   --bpf-program DeeUnCHcnPG8arbjGTLhTKeDhpPUBper3TDrpFPHnCwy contracts/axis-vault/target/deploy/axis_vault.so \
+  --bpf-program metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s "${mpl_so_path}" \
   > /tmp/solana-test-validator.log 2>&1 &
 validator_pid=$!
 

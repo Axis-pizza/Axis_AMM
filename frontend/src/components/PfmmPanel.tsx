@@ -13,6 +13,8 @@ import {
   ixAddLiquidity3,
   ixClaim3,
   ixClearBatch3,
+  ixCloseBatchHistory3,
+  ixCloseExpiredTicket3,
   ixInitPool3,
   ixSetPaused3,
   ixSwapRequest3,
@@ -22,11 +24,17 @@ import { buildBareTokenAccountIxs } from "../lib/spl";
 import { sendTx, sendVersionedTx, explorerTx } from "../lib/tx";
 import type { ClusterConfig } from "../lib/programs";
 import { truncatePubkey } from "../lib/format";
-import { fetchPoolState3, type PoolState3Data } from "../lib/pfmmState";
+import {
+  fetchHistory3,
+  fetchPoolState3,
+  fetchTicket3,
+  type PoolState3Data,
+} from "../lib/pfmmState";
 import { buildJupiterSolSeedPlan } from "../lib/pfmmSeedPlan";
 import {
   AddLiquidityForm,
   ClearClaimButtons,
+  CrankerForm,
   InitPoolForm,
   JupiterSolSeedForm,
   PausedToggle,
@@ -35,6 +43,9 @@ import {
   WithdrawFeesForm,
   type PoolView,
 } from "./PfmmControls";
+
+const CLOSE_HISTORY_DELAY = 100n;
+const TICKET_EXPIRY_BATCHES = 200n;
 
 /// Pfmm interaction panel.
 ///
@@ -87,6 +98,14 @@ export function PfmmPanel({
   const [seedSolForLiq, setSeedSolForLiq] = useState(0.05);
   const [seedSolForSwap, setSeedSolForSwap] = useState(0.01);
   const [jupiterSlippageBps, setJupiterSlippageBps] = useState(50);
+
+  // Cranker UI state — user pastes a batch_id (or owner pubkey for
+  // tickets) so we can re-derive the PDA and read the on-chain state
+  // before sending. Trying to enumerate all batches client-side here
+  // would burn RPC budget; targeted lookups are cheaper.
+  const [closeHistoryBatchId, setCloseHistoryBatchId] = useState("0");
+  const [closeTicketBatchId, setCloseTicketBatchId] = useState("0");
+  const [closeTicketOwner, setCloseTicketOwner] = useState("");
 
   // Vault keypairs for the in-flight InitPool tx. Cleared after the
   // pool fetch returns the on-chain values.
@@ -454,6 +473,106 @@ export function PfmmPanel({
     }
   }
 
+  async function closeBatchHistory() {
+    if (!publicKey || !pool) return;
+    let batchId: bigint;
+    try {
+      batchId = BigInt(closeHistoryBatchId);
+    } catch {
+      pushLog("✗ history batch_id must be a non-negative integer");
+      return;
+    }
+    if (!isAuthority) {
+      pushLog(
+        "✗ CloseBatchHistory rent_recipient must be the pool authority — connect the authority wallet first.",
+      );
+      return;
+    }
+    if (pool.currentBatchId < batchId + CLOSE_HISTORY_DELAY) {
+      pushLog(
+        `✗ history batch ${batchId} not yet eligible — needs current_batch_id ≥ ${batchId + CLOSE_HISTORY_DELAY} (have ${pool.currentBatchId}).`,
+      );
+      return;
+    }
+    setStage("closeHistory");
+    try {
+      const [history] = findHistory3(pfmm, pool.pool, batchId);
+      const existing = await fetchHistory3(connection, history);
+      if (!existing) {
+        pushLog(`✗ no history account at ${history.toBase58()} (batch ${batchId})`);
+        setStage("idle");
+        return;
+      }
+      const ix = ixCloseBatchHistory3({
+        programId: pfmm,
+        rentRecipient: publicKey,
+        pool: pool.pool,
+        history,
+      });
+      const sig = await sendTx(connection, wallet, [ix]);
+      pushLog(
+        `✓ close_batch_history batch=${batchId}: ${sig.slice(0, 12)}…  → ${explorerTx(sig, config.explorerCluster)}`,
+      );
+      setStage("idle");
+    } catch (e) {
+      setStage("err");
+      pushLog(`✗ ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
+  async function closeExpiredTicket() {
+    if (!publicKey || !pool) return;
+    let batchId: bigint;
+    try {
+      batchId = BigInt(closeTicketBatchId);
+    } catch {
+      pushLog("✗ ticket batch_id must be a non-negative integer");
+      return;
+    }
+    if (pool.currentBatchId < batchId + TICKET_EXPIRY_BATCHES) {
+      pushLog(
+        `✗ ticket batch ${batchId} not yet expired — needs current_batch_id ≥ ${batchId + TICKET_EXPIRY_BATCHES} (have ${pool.currentBatchId}).`,
+      );
+      return;
+    }
+    setStage("closeTicket");
+    try {
+      let ownerPk: PublicKey;
+      try {
+        // Default to caller's wallet if owner field is left blank.
+        ownerPk = closeTicketOwner.trim().length === 0
+          ? publicKey
+          : new PublicKey(closeTicketOwner.trim());
+      } catch {
+        pushLog("✗ ticket owner must be a base58 pubkey (or blank for self)");
+        setStage("idle");
+        return;
+      }
+      const [ticket] = findTicket3(pfmm, pool.pool, ownerPk, batchId);
+      const existing = await fetchTicket3(connection, ticket);
+      if (!existing) {
+        pushLog(`✗ no ticket account at ${ticket.toBase58()} (owner ${truncatePubkey(ownerPk.toBase58(), 4, 4)}, batch ${batchId})`);
+        setStage("idle");
+        return;
+      }
+      const ix = ixCloseExpiredTicket3({
+        programId: pfmm,
+        caller: publicKey,
+        pool: pool.pool,
+        ticket,
+        rentRecipient: ownerPk,
+      });
+      const sig = await sendTx(connection, wallet, [ix]);
+      pushLog(
+        `✓ close_expired_ticket owner=${truncatePubkey(ownerPk.toBase58(), 4, 4)} batch=${batchId}: ${sig.slice(0, 12)}…  → ${explorerTx(sig, config.explorerCluster)}`,
+      );
+      setStage("idle");
+    } catch (e) {
+      setStage("err");
+      pushLog(`✗ ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
   async function setPaused(paused: boolean) {
     if (!publicKey || !pool) return;
     setStage(paused ? "pause" : "unpause");
@@ -657,6 +776,19 @@ export function PfmmPanel({
                 clearBatch={clearBatch}
                 claim={claim}
                 windowOpen={windowOpen}
+                stage={stage}
+              />
+              <CrankerForm
+                currentBatchId={pool.currentBatchId}
+                isAuthority={isAuthority}
+                closeHistoryBatchId={closeHistoryBatchId}
+                setCloseHistoryBatchId={setCloseHistoryBatchId}
+                closeBatchHistory={closeBatchHistory}
+                closeTicketBatchId={closeTicketBatchId}
+                setCloseTicketBatchId={setCloseTicketBatchId}
+                closeTicketOwner={closeTicketOwner}
+                setCloseTicketOwner={setCloseTicketOwner}
+                closeExpiredTicket={closeExpiredTicket}
                 stage={stage}
               />
               {isAuthority && (

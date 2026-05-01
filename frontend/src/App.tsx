@@ -6,8 +6,10 @@ import { ProgramCard } from "./components/ProgramCard";
 import { ScopeNote } from "./components/ScopeNote";
 import { TokensPanel } from "./components/TokensPanel";
 import { CreateEtfPanel } from "./components/CreateEtfPanel";
+import { WithdrawPanel } from "./components/WithdrawPanel";
 import { WithdrawSolPanel } from "./components/WithdrawSolPanel";
 import { PfmmPanel } from "./components/PfmmPanel";
+import { PoolsPanel } from "./components/PoolsPanel";
 import { getClusterConfig, type Cluster, type ClusterConfig } from "./lib/programs";
 import { fetchWalletTokens } from "./lib/tokens";
 
@@ -22,7 +24,14 @@ export default function App() {
   );
 }
 
-type Tab = "overview" | "tokens" | "etf" | "withdraw" | "pfmm";
+type Tab =
+  | "overview"
+  | "tokens"
+  | "etf"
+  | "withdraw_etf"
+  | "withdraw_sol"
+  | "pools"
+  | "pfmm";
 
 function Shell({
   config,
@@ -44,6 +53,13 @@ function Shell({
     );
   }, []);
   const clearSelection = useCallback(() => setSelectedMints([]), []);
+  /// Hand a 3-mint payload from PoolsPanel to PfmmPanel: replace the
+  /// selection in the canonical chain order, then jump tabs so PfmmPanel
+  /// re-fetches and binds to the existing pool.
+  const pickPool = useCallback((mints: [string, string, string]) => {
+    setSelectedMints([mints[0], mints[1], mints[2]]);
+    setTab("pfmm");
+  }, []);
 
   // Cache decimals-by-mint so PfmmPanel can convert UI amounts → base units.
   const [walletDecimals, setWalletDecimals] = useState<Record<string, number>>({});
@@ -111,7 +127,13 @@ function Shell({
           </div>
         )}
 
-        {tab === "withdraw" && <WithdrawSolPanel config={config} />}
+        {tab === "withdraw_etf" && <WithdrawPanel config={config} />}
+
+        {tab === "withdraw_sol" && <WithdrawSolPanel config={config} />}
+
+        {tab === "pools" && (
+          <PoolsPanel config={config} onPickPool={pickPool} />
+        )}
 
         {tab === "pfmm" && (
           <div className="space-y-6">
@@ -202,7 +224,9 @@ function Tabs({
     { id: "overview", label: "Overview" },
     { id: "tokens", label: "Tokens" },
     { id: "etf", label: "Create ETF" },
-    { id: "withdraw", label: "Withdraw → SOL" },
+    { id: "withdraw_etf", label: "Withdraw ETF" },
+    { id: "withdraw_sol", label: "Withdraw → SOL" },
+    { id: "pools", label: "Pools" },
     { id: "pfmm", label: "PFMM" },
   ];
   return (

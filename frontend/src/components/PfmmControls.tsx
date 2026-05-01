@@ -301,6 +301,109 @@ export function ClearClaimButtons({
   );
 }
 
+export function CrankerForm({
+  currentBatchId,
+  isAuthority,
+  closeHistoryBatchId,
+  setCloseHistoryBatchId,
+  closeBatchHistory,
+  closeTicketBatchId,
+  setCloseTicketBatchId,
+  closeTicketOwner,
+  setCloseTicketOwner,
+  closeExpiredTicket,
+  stage,
+}: {
+  currentBatchId: bigint;
+  isAuthority: boolean;
+  closeHistoryBatchId: string;
+  setCloseHistoryBatchId: (s: string) => void;
+  closeBatchHistory: () => void;
+  closeTicketBatchId: string;
+  setCloseTicketBatchId: (s: string) => void;
+  closeTicketOwner: string;
+  setCloseTicketOwner: (s: string) => void;
+  closeExpiredTicket: () => void;
+  stage: string;
+}) {
+  return (
+    <div className="rounded border border-slate-800 bg-slate-950/30 p-3">
+      <p className="mb-1 text-xs uppercase text-slate-400">Cranker — rent reclaim</p>
+      <p className="mb-3 text-[11px] text-slate-500">
+        Current batch_id <span className="font-mono text-slate-300">{currentBatchId.toString()}</span>{" "}
+        · history closes after +100 batches (authority only) · tickets expire after
+        +200 batches (anyone can crank, rent returns to ticket owner).
+      </p>
+
+      <div className="space-y-3">
+        <div className="rounded bg-slate-900/40 p-2">
+          <p className="mb-2 text-[11px] font-medium text-slate-300">
+            CloseBatchHistory{" "}
+            <span className="text-slate-500">(authority only)</span>
+          </p>
+          <div className="flex flex-wrap items-end gap-2 text-xs">
+            <label className="flex flex-col">
+              <span className="mb-1 text-slate-400">history batch_id</span>
+              <input
+                value={closeHistoryBatchId}
+                onChange={(e) => setCloseHistoryBatchId(e.target.value)}
+                className="w-32 rounded bg-slate-800 px-2 py-1 font-mono text-slate-100"
+              />
+            </label>
+            <button
+              onClick={closeBatchHistory}
+              disabled={!isAuthority || stage !== "idle"}
+              title={
+                isAuthority
+                  ? "reclaim rent from a ClearedBatchHistory3 PDA"
+                  : "connected wallet is not the pool authority"
+              }
+              className="rounded-lg bg-slate-700 px-3 py-1.5 text-xs font-medium text-white hover:bg-slate-600 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {stage === "closeHistory" ? "closing…" : "CloseBatchHistory"}
+            </button>
+          </div>
+        </div>
+
+        <div className="rounded bg-slate-900/40 p-2">
+          <p className="mb-2 text-[11px] font-medium text-slate-300">
+            CloseExpiredTicket{" "}
+            <span className="text-slate-500">(anyone)</span>
+          </p>
+          <div className="flex flex-wrap items-end gap-2 text-xs">
+            <label className="flex flex-col">
+              <span className="mb-1 text-slate-400">ticket batch_id</span>
+              <input
+                value={closeTicketBatchId}
+                onChange={(e) => setCloseTicketBatchId(e.target.value)}
+                className="w-28 rounded bg-slate-800 px-2 py-1 font-mono text-slate-100"
+              />
+            </label>
+            <label className="flex flex-col">
+              <span className="mb-1 text-slate-400">
+                ticket owner (blank = self)
+              </span>
+              <input
+                value={closeTicketOwner}
+                onChange={(e) => setCloseTicketOwner(e.target.value)}
+                placeholder="base58 pubkey"
+                className="w-72 rounded bg-slate-800 px-2 py-1 font-mono text-slate-100"
+              />
+            </label>
+            <button
+              onClick={closeExpiredTicket}
+              disabled={stage !== "idle"}
+              className="rounded-lg bg-slate-700 px-3 py-1.5 text-xs font-medium text-white hover:bg-slate-600 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {stage === "closeTicket" ? "closing…" : "CloseExpiredTicket"}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function WithdrawFeesForm({
   amount0,
   setAmount0,

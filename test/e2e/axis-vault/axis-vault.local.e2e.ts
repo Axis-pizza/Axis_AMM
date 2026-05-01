@@ -51,6 +51,27 @@ async function getCU(conn: Connection, sig: string): Promise<number | null> {
   return tx?.meta?.computeUnitsConsumed ?? null;
 }
 
+/// v1.1: derive the Metaplex Token Metadata PDA and append the trailing
+/// `[uri_len][uri]` bytes + the two new accounts (metadata_pda,
+/// metaplex_program). Use for every hand-rolled CreateEtf in this file.
+function metadataPdaFor(etfMint: PublicKey): PublicKey {
+  return PublicKey.findProgramAddressSync(
+    [
+      Buffer.from("metadata"),
+      METAPLEX_TOKEN_METADATA_PROGRAM_ID.toBuffer(),
+      etfMint.toBuffer(),
+    ],
+    METAPLEX_TOKEN_METADATA_PROGRAM_ID,
+  )[0];
+}
+const URI_LEN_ZERO = Buffer.from([0]); // empty URI is valid (v1.1)
+function v1_1MetaKeys(etfMint: PublicKey) {
+  return [
+    { pubkey: metadataPdaFor(etfMint), isSigner: false, isWritable: true },
+    { pubkey: METAPLEX_TOKEN_METADATA_PROGRAM_ID, isSigner: false, isWritable: false },
+  ];
+}
+
 async function main() {
   const conn = new Connection(RPC_URL, "confirmed");
   const payer = loadPayer();
@@ -372,6 +393,7 @@ async function main() {
       dupTicker,                        // ticker
       Buffer.from([dupName.length]),    // name_len
       dupName,                          // name
+      URI_LEN_ZERO,                     // v1.1: empty uri
     ]);
 
     await sendAndConfirmTransaction(conn, new Transaction().add(new TransactionInstruction({
@@ -387,6 +409,7 @@ async function main() {
         ...dupMints.map(m => ({ pubkey: m, isSigner: false, isWritable: false })),
         // vault accounts
         ...dupVaults.map(v => ({ pubkey: v, isSigner: false, isWritable: true })),
+        ...v1_1MetaKeys(dupMintKp.publicKey),
       ],
       data: dupCreateData,
     })), [payer]);
@@ -882,6 +905,7 @@ async function main() {
       Buffer.from([0]), Buffer.from([1]), u16Le(10000),
       Buffer.from([badTicker.length]), badTicker,
       Buffer.from([badName.length]), badName,
+      URI_LEN_ZERO,                     // v1.1
     ]);
     await sendAndConfirmTransaction(conn, new Transaction().add(new TransactionInstruction({
       programId: PROGRAM_ID,
@@ -894,6 +918,7 @@ async function main() {
         { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
         { pubkey: mints[0], isSigner: false, isWritable: false },
         { pubkey: badVaultKp.publicKey, isSigner: false, isWritable: true },
+        ...v1_1MetaKeys(badMintKp.publicKey),
       ],
       data: badData,
     })), [payer]);
@@ -944,6 +969,7 @@ async function main() {
       Buffer.from([0]), Buffer.from([TOKEN_COUNT]), wbuf,
       Buffer.from([badTicker.length]), badTicker,
       Buffer.from([badName.length]), badName,
+      URI_LEN_ZERO,                     // v1.1
     ]);
     await sendAndConfirmTransaction(conn, new Transaction().add(new TransactionInstruction({
       programId: PROGRAM_ID,
@@ -956,6 +982,7 @@ async function main() {
         { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
         ...mints.map(m => ({ pubkey: m, isSigner: false, isWritable: false })),
         ...badVaultKps.map(kp => ({ pubkey: kp.publicKey, isSigner: false, isWritable: true })),
+        ...v1_1MetaKeys(badMintKp.publicKey),
       ],
       data: badData,
     })), [payer]);
@@ -998,6 +1025,7 @@ async function main() {
       Buffer.from([0]), Buffer.from([TOKEN_COUNT]), weightsBuf,
       Buffer.from([tickerBytes.length]), tickerBytes,
       Buffer.from([nameBytes.length]), nameBytes, // same name as Step 5 → same PDA
+      URI_LEN_ZERO,                     // v1.1
     ]);
     await sendAndConfirmTransaction(conn, new Transaction().add(new TransactionInstruction({
       programId: PROGRAM_ID,
@@ -1010,6 +1038,7 @@ async function main() {
         { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
         ...mints.map(m => ({ pubkey: m, isSigner: false, isWritable: false })),
         ...dupVaultKps.map(kp => ({ pubkey: kp.publicKey, isSigner: false, isWritable: true })),
+        ...v1_1MetaKeys(dupMintKp.publicKey),
       ],
       data: dupData,
     })), [payer]);
@@ -1062,7 +1091,7 @@ async function main() {
       SystemProgram.transfer({ fromPubkey: payer.publicKey, toPubkey: treasuryKp.publicKey, lamports: LAMPORTS_PER_SOL / 20 })
     ), [payer]);
 
-    // CreateEtf (data layout per #37: ticker precedes name)
+    // CreateEtf v1.1 (ticker precedes name; uri appended; metadata accounts).
     const wbuf = Buffer.alloc(TOKEN_COUNT * 2);
     for (let i = 0; i < TOKEN_COUNT; i++) wbuf.writeUInt16LE(WEIGHTS[i], i * 2);
     const tickerBytes = Buffer.from("AX");
@@ -1070,6 +1099,7 @@ async function main() {
       Buffer.from([0]), Buffer.from([TOKEN_COUNT]), wbuf,
       Buffer.from([tickerBytes.length]), tickerBytes,
       Buffer.from([name.length]), name,
+      URI_LEN_ZERO,                     // v1.1
     ]);
     await sendAndConfirmTransaction(conn, new Transaction().add(new TransactionInstruction({
       programId: PROGRAM_ID,
@@ -1082,6 +1112,7 @@ async function main() {
         { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
         ...mints.map(m => ({ pubkey: m, isSigner: false, isWritable: false })),
         ...vPks.map(v => ({ pubkey: v, isSigner: false, isWritable: true })),
+        ...v1_1MetaKeys(mintKp.publicKey),
       ],
       data: cdata,
     })), [payer]);
@@ -1253,6 +1284,7 @@ async function main() {
       Buffer.from([0]), Buffer.from([TOKEN_COUNT]), wbuf,
       Buffer.from([cappedTicker.length]), cappedTicker,
       Buffer.from([cappedName.length]), cappedName,
+      URI_LEN_ZERO,                     // v1.1
     ]);
     await sendAndConfirmTransaction(conn, new Transaction().add(new TransactionInstruction({
       programId: PROGRAM_ID,
@@ -1265,6 +1297,7 @@ async function main() {
         { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
         ...mints.map(m => ({ pubkey: m, isSigner: false, isWritable: false })),
         ...vKps.map(kp => ({ pubkey: kp.publicKey, isSigner: false, isWritable: true })),
+        ...v1_1MetaKeys(mintKp.publicKey),
       ],
       data,
     })), [payer]);
@@ -1447,11 +1480,13 @@ async function main() {
         { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
         ...mints.map(m => ({ pubkey: m, isSigner: false, isWritable: false })),
         ...forbidVaultKps.map(kp => ({ pubkey: kp.publicKey, isSigner: false, isWritable: true })),
+        ...v1_1MetaKeys(forbidMintKp.publicKey),
       ],
       data: Buffer.concat([
         Buffer.from([0]), Buffer.from([TOKEN_COUNT]), forbidWbuf,
         Buffer.from([forbidTickerBytes.length]), forbidTickerBytes,
         Buffer.from([forbidName.length]), forbidName,
+        URI_LEN_ZERO,                     // v1.1
       ]),
     })), [payer]);
 

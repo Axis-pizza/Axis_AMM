@@ -40,8 +40,28 @@ import {
   Transaction,
   TransactionInstruction,
 } from "@solana/web3.js";
-import bs58 from "bs58";
 import { Buffer } from "buffer";
+import { spawnSync } from "child_process";
+
+// Local base58 encoder — avoids the `bs58` dep so this script stays
+// usable from a stock Node/bun toolchain without extra @types.
+const B58_ALPHABET =
+  "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+function bs58encode(buf: Buffer | Uint8Array): string {
+  let n = 0n;
+  for (const b of buf) n = n * 256n + BigInt(b);
+  let out = "";
+  while (n > 0n) {
+    const r = Number(n % 58n);
+    n = n / 58n;
+    out = B58_ALPHABET[r] + out;
+  }
+  for (const b of buf) {
+    if (b === 0) out = "1" + out;
+    else break;
+  }
+  return out;
+}
 
 const BPF_LOADER_UPGRADEABLE = new PublicKey(
   "BPFLoaderUpgradeab1e11111111111111111111111",
@@ -96,83 +116,87 @@ async function maybeFetchBlockhash(): Promise<string> {
   }
 }
 
-const blockhash = await maybeFetchBlockhash();
-const tx = new Transaction({ feePayer: SQUADS_VAULT, recentBlockhash: blockhash });
-tx.add(ix);
-const serialized = tx.serialize({ requireAllSignatures: false, verifySignatures: false });
+async function main(): Promise<void> {
+  const blockhash = await maybeFetchBlockhash();
+  const tx = new Transaction({ feePayer: SQUADS_VAULT, recentBlockhash: blockhash });
+  tx.add(ix);
+  const serialized = tx.serialize({ requireAllSignatures: false, verifySignatures: false });
 
-const fields: Record<string, string> = {
-  "program-id": BPF_LOADER_UPGRADEABLE.toBase58(),
-  "data-hex": data.toString("hex"),
-  "data-base58": bs58.encode(data),
-  "tx-base58": bs58.encode(serialized),
-  "tx-base64": serialized.toString("base64"),
-  "account-0": ix.keys[0].pubkey.toBase58(),
-  "account-1": ix.keys[1].pubkey.toBase58(),
-  "account-2": ix.keys[2].pubkey.toBase58(),
-  "account-3": ix.keys[3].pubkey.toBase58(),
-  "account-4": ix.keys[4].pubkey.toBase58(),
-};
+  const fields: Record<string, string> = {
+    "program-id": BPF_LOADER_UPGRADEABLE.toBase58(),
+    "data-hex": data.toString("hex"),
+    "data-base58": bs58encode(data),
+    "tx-base58": bs58encode(serialized),
+    "tx-base64": serialized.toString("base64"),
+    "account-0": ix.keys[0].pubkey.toBase58(),
+    "account-1": ix.keys[1].pubkey.toBase58(),
+    "account-2": ix.keys[2].pubkey.toBase58(),
+    "account-3": ix.keys[3].pubkey.toBase58(),
+    "account-4": ix.keys[4].pubkey.toBase58(),
+  };
 
-const requested = process.argv[2];
+  const requested = process.argv[2];
 
-if (requested) {
-  const value = fields[requested];
-  if (!value) {
-    console.error(`Unknown field: ${requested}`);
-    console.error(`Available: ${Object.keys(fields).join(", ")}`);
-    process.exit(1);
+  if (requested) {
+    const value = fields[requested];
+    if (!value) {
+      console.error(`Unknown field: ${requested}`);
+      console.error(`Available: ${Object.keys(fields).join(", ")}`);
+      process.exit(1);
+    }
+    // pbcopy on macOS / xclip on Linux.
+    const clip =
+      process.platform === "darwin"
+        ? spawnSync("pbcopy", [], { input: value })
+        : spawnSync("xclip", ["-selection", "clipboard"], { input: value });
+    if (clip.status !== 0) {
+      console.error("Clipboard copy failed; printing value instead:");
+      console.error(value);
+      process.exit(1);
+    }
+    const preview = value.length > 80 ? `${value.slice(0, 60)}…(${value.length} chars)` : value;
+    console.log(`✓ Copied ${requested} → clipboard`);
+    console.log(`  ${preview}`);
+    return;
   }
-  // pbcopy on macOS / xclip on Linux.
-  const clip =
-    process.platform === "darwin"
-      ? Bun.spawnSync({ cmd: ["pbcopy"], stdin: new TextEncoder().encode(value) })
-      : Bun.spawnSync({
-          cmd: ["xclip", "-selection", "clipboard"],
-          stdin: new TextEncoder().encode(value),
-        });
-  if (clip.exitCode !== 0) {
-    console.error("Clipboard copy failed; printing value instead:");
-    console.error(value);
-    process.exit(1);
-  }
-  const preview = value.length > 80 ? `${value.slice(0, 60)}…(${value.length} chars)` : value;
-  console.log(`✓ Copied ${requested} → clipboard`);
-  console.log(`  ${preview}`);
-  process.exit(0);
+
+  // No field arg → print everything as before.
+  console.log("=== ExtendProgramChecked ix ===");
+  console.log("Program:", BPF_LOADER_UPGRADEABLE.toBase58());
+  console.log("Additional bytes:", additionalBytes);
+  console.log("Data (hex):     ", data.toString("hex"));
+  console.log("Data (base58):  ", bs58encode(data));
+  console.log("");
+  console.log("Accounts (order matters):");
+  ix.keys.forEach((k, i) => {
+    const flags = `${k.isSigner ? "S" : "-"}${k.isWritable ? "W" : "-"}`;
+    console.log(`  ${i}: [${flags}] ${k.pubkey.toBase58()}`);
+  });
+  console.log("  Legend: S = signer, W = writable");
+  console.log("");
+  console.log(
+    `New programData size after extend: 104,701 + ${additionalBytes} = ${
+      104701 + additionalBytes
+    } bytes`,
+  );
+  console.log(
+    `v1.1 .so + 45-byte header needs 108,885 bytes — ${
+      104701 + additionalBytes - 108885
+    } bytes spare after upgrade`,
+  );
+  console.log("");
+  console.log("=== Unsigned legacy transaction (blockhash:", blockhash, ") ===");
+  console.log("Base58:", bs58encode(serialized));
+  console.log("");
+  console.log("Base64:", serialized.toString("base64"));
+  console.log("");
+  console.log("Pass a field name as the first arg to pipe directly to pbcopy:");
+  console.log(
+    "  bun scripts/ops/build-extend-program-ix.ts <" + Object.keys(fields).join(" | ") + ">",
+  );
 }
 
-// No field arg → print everything as before.
-console.log("=== ExtendProgramChecked ix ===");
-console.log("Program:", BPF_LOADER_UPGRADEABLE.toBase58());
-console.log("Additional bytes:", additionalBytes);
-console.log("Data (hex):     ", data.toString("hex"));
-console.log("Data (base58):  ", bs58.encode(data));
-console.log("");
-console.log("Accounts (order matters):");
-ix.keys.forEach((k, i) => {
-  const flags = `${k.isSigner ? "S" : "-"}${k.isWritable ? "W" : "-"}`;
-  console.log(`  ${i}: [${flags}] ${k.pubkey.toBase58()}`);
+main().catch((err) => {
+  console.error(err);
+  process.exit(1);
 });
-console.log("  Legend: S = signer, W = writable");
-console.log("");
-console.log(
-  `New programData size after extend: 104,701 + ${additionalBytes} = ${
-    104701 + additionalBytes
-  } bytes`,
-);
-console.log(
-  `v1.1 .so + 45-byte header needs 108,885 bytes — ${
-    104701 + additionalBytes - 108885
-  } bytes spare after upgrade`,
-);
-console.log("");
-console.log("=== Unsigned legacy transaction (blockhash:", blockhash, ") ===");
-console.log("Base58:", bs58.encode(serialized));
-console.log("");
-console.log("Base64:", serialized.toString("base64"));
-console.log("");
-console.log("Pass a field name as the first arg to pipe directly to pbcopy:");
-console.log(
-  "  bun scripts/ops/build-extend-program-ix.ts <" + Object.keys(fields).join(" | ") + ">",
-);

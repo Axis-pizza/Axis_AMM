@@ -48,6 +48,24 @@ export function findEtfState(
   );
 }
 
+/// Metaplex Token Metadata Program (mainnet + devnet share this ID).
+export const METAPLEX_TOKEN_METADATA_PROGRAM_ID = new PublicKey(
+  "metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s",
+);
+
+/// Derive the Metaplex Token Metadata PDA for a given mint:
+/// `[b"metadata", METAPLEX_TOKEN_METADATA_PROGRAM_ID, mint]`.
+export function findMetadataPda(mint: PublicKey): [PublicKey, number] {
+  return PublicKey.findProgramAddressSync(
+    [
+      Buffer.from("metadata"),
+      METAPLEX_TOKEN_METADATA_PROGRAM_ID.toBuffer(),
+      mint.toBuffer(),
+    ],
+    METAPLEX_TOKEN_METADATA_PROGRAM_ID,
+  );
+}
+
 export interface CreateEtfArgs {
   programId: PublicKey;
   payer: PublicKey;
@@ -59,6 +77,13 @@ export interface CreateEtfArgs {
   weightsBps: number[]; // length = basketMints.length, sums to 10_000
   ticker: string;
   name: string;
+  /// v1.1: off-chain JSON metadata URI (max 200 bytes). Empty string is
+  /// valid and emits a metadata account with no URI.
+  uri: string;
+  /// v1.1: optional override for the Metaplex metadata PDA; defaults to
+  /// `findMetadataPda(etfMint)`. Pass-through is mainly for tests that
+  /// want to assert the program rejects mis-derived PDAs.
+  metadataPda?: PublicKey;
 }
 
 export function ixCreateEtf(args: CreateEtfArgs): TransactionInstruction {
@@ -66,6 +91,11 @@ export function ixCreateEtf(args: CreateEtfArgs): TransactionInstruction {
     throw new Error("basketMints / vaults length mismatch");
   if (args.basketMints.length !== args.weightsBps.length)
     throw new Error("basketMints / weights length mismatch");
+  if (args.ticker.length > 10)
+    throw new Error("ticker exceeds Metaplex MAX_SYMBOL_LENGTH (10)");
+  const uriBytes = Buffer.from(args.uri);
+  if (uriBytes.length > 200)
+    throw new Error("uri exceeds Metaplex MAX_URI_LENGTH (200)");
 
   const tokenCount = args.basketMints.length;
   const weightsBuf = Buffer.alloc(tokenCount * 2);
@@ -83,7 +113,11 @@ export function ixCreateEtf(args: CreateEtfArgs): TransactionInstruction {
     tickerBytes,
     Buffer.from([nameBytes.length]),
     nameBytes,
+    Buffer.from([uriBytes.length]), // v1.1
+    uriBytes,                        // v1.1
   ]);
+
+  const metadataPda = args.metadataPda ?? findMetadataPda(args.etfMint)[0];
 
   return new TransactionInstruction({
     programId: args.programId,
@@ -104,6 +138,13 @@ export function ixCreateEtf(args: CreateEtfArgs): TransactionInstruction {
         isSigner: false,
         isWritable: true,
       })),
+      // v1.1
+      { pubkey: metadataPda, isSigner: false, isWritable: true },
+      {
+        pubkey: METAPLEX_TOKEN_METADATA_PROGRAM_ID,
+        isSigner: false,
+        isWritable: false,
+      },
     ],
     data,
   });

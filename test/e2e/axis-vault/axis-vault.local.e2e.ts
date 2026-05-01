@@ -17,9 +17,18 @@ import * as os from "os";
 const PROGRAM_ID = new PublicKey(process.env.PROGRAM_ID ?? "DeeUnCHcnPG8arbjGTLhTKeDhpPUBper3TDrpFPHnCwy");
 const RPC_URL = process.env.RPC_URL ?? "https://api.devnet.solana.com";
 const ETF_NAME = process.env.ETF_NAME ?? `AX${Date.now().toString(36).toUpperCase().slice(-10)}`;
-// Ticker: ASCII upper/digits only, 2..=16 bytes (issue #37). Default stays
-// deterministic across reruns by hashing into the process-start timestamp.
+// Ticker: ASCII upper/digits only, 2..=10 bytes (v1.1, was 2..=16 in v1.0).
+// 10 matches Metaplex MAX_SYMBOL_LENGTH so the inner CPI can't reject late
+// with `SymbolTooLong`.
 const ETF_TICKER = process.env.ETF_TICKER ?? `AX${Date.now().toString(36).toUpperCase().slice(-4)}`;
+// v1.1: Metaplex Token Metadata URI. Empty string is valid and produces a
+// metadata account with no off-chain JSON pointer. Default stays empty so
+// the local validator doesn't need to reach off-host.
+const ETF_URI = process.env.ETF_URI ?? "";
+// Metaplex Token Metadata Program ID — same on mainnet, devnet, localnet.
+const METAPLEX_TOKEN_METADATA_PROGRAM_ID = new PublicKey(
+  "metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s",
+);
 const TOKEN_COUNT = 3;
 const WEIGHTS = [3334, 3333, 3333]; // ~33.3% each, sums to 10000
 
@@ -110,11 +119,23 @@ async function main() {
     SystemProgram.transfer({ fromPubkey: payer.publicKey, toPubkey: treasuryKp.publicKey, lamports: LAMPORTS_PER_SOL / 10 })
   ), [payer]);
 
-  // 6. CreateEtf (data layout per #37: ticker precedes name)
+  // 6. CreateEtf (v1.1: ticker before name, uri appended; metadata PDA
+  //    + Metaplex program tail-appended to accounts).
   console.log("\n> CreateEtf");
   const tickerBytes = Buffer.from(ETF_TICKER);
+  const uriBytes = Buffer.from(ETF_URI);
   const weightsBuf = Buffer.alloc(TOKEN_COUNT * 2);
   for (let i = 0; i < TOKEN_COUNT; i++) weightsBuf.writeUInt16LE(WEIGHTS[i], i * 2);
+
+  // Metaplex metadata PDA: [b"metadata", METAPLEX_PROGRAM_ID, etf_mint].
+  const [metadataPda] = PublicKey.findProgramAddressSync(
+    [
+      Buffer.from("metadata"),
+      METAPLEX_TOKEN_METADATA_PROGRAM_ID.toBuffer(),
+      etfMintKp.publicKey.toBuffer(),
+    ],
+    METAPLEX_TOKEN_METADATA_PROGRAM_ID,
+  );
 
   const createData = Buffer.concat([
     Buffer.from([0]),                   // disc = CreateEtf
@@ -124,6 +145,8 @@ async function main() {
     tickerBytes,                        // ticker
     Buffer.from([nameBytes.length]),    // name_len
     nameBytes,                          // name
+    Buffer.from([uriBytes.length]),     // uri_len (v1.1)
+    uriBytes,                           // uri (v1.1)
   ]);
 
   const createSig = await sendAndConfirmTransaction(conn, new Transaction().add(new TransactionInstruction({
@@ -139,10 +162,14 @@ async function main() {
       ...mints.map(m => ({ pubkey: m, isSigner: false, isWritable: false })),
       // vault accounts
       ...vaults.map(v => ({ pubkey: v, isSigner: false, isWritable: true })),
+      // v1.1: Metaplex metadata PDA (created by CPI) + Metaplex program
+      { pubkey: metadataPda, isSigner: false, isWritable: true },
+      { pubkey: METAPLEX_TOKEN_METADATA_PROGRAM_ID, isSigner: false, isWritable: false },
     ],
     data: createData,
   })), [payer]);
   console.log("  CU:", await getCU(conn, createSig));
+  console.log("  Metadata PDA:", metadataPda.toBase58());
 
   // Verify ETF state (#37: also check stored metadata).
   const etfInfo = await conn.getAccountInfo(etfState);

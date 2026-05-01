@@ -46,6 +46,10 @@ export function CreateEtfPanel({
   const [ticker, setTicker] = useState(
     () => `AX${Date.now().toString(36).toUpperCase().slice(-3)}`,
   );
+  // v1.1: Metaplex Token Metadata URI (off-chain JSON). Empty is allowed
+  // and produces a metadata account with no URI set — wallets fall back
+  // to the on-chain name/symbol.
+  const [uri, setUri] = useState("");
   const [rows, setRows] = useState<BasketRow[]>([]);
   // Default 1_000_000_000 = 1000 tokens at 6 decimals, matches the e2e
   // test. The program rejects amount < MIN_FIRST_DEPOSIT (1_000_000)
@@ -126,6 +130,7 @@ export function CreateEtfPanel({
         weightsBps: rows.map((r) => r.weight),
         ticker,
         name,
+        uri,
       });
       pushLog(`Tx1: alloc ETF mint + ${basketMints.length} vaults + CreateEtf "${name}"`);
       const sig2 = await sendTx(
@@ -295,7 +300,7 @@ export function CreateEtfPanel({
             </label>
             <label className="flex flex-col">
               <span className="mb-1 text-slate-400">
-                Ticker (A-Z 0-9, 2..16)
+                Ticker (A-Z 0-9, 2..10)
               </span>
               <input
                 value={ticker}
@@ -304,6 +309,18 @@ export function CreateEtfPanel({
               />
             </label>
           </div>
+
+          <label className="flex flex-col text-xs">
+            <span className="mb-1 text-slate-400">
+              Metadata URI (≤200 bytes, optional — off-chain JSON for wallets)
+            </span>
+            <input
+              value={uri}
+              onChange={(e) => setUri(e.target.value)}
+              placeholder="https://example.com/etf-metadata.json"
+              className="rounded bg-slate-800 px-2 py-1 font-mono text-slate-100"
+            />
+          </label>
 
           <div>
             <p className="mb-2 text-xs text-slate-400">

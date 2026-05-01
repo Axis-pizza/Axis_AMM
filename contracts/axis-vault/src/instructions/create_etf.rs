@@ -13,6 +13,9 @@ use crate::constants::{
     protocol_treasury_is_active, DEFAULT_FEE_BPS, DEFAULT_MAX_FEE_BPS, PROTOCOL_TREASURY,
 };
 use crate::error::VaultError;
+use crate::metaplex::{
+    invoke_create_metadata_v3, MAX_SYMBOL_LENGTH, METAPLEX_TOKEN_METADATA_PROGRAM_ID,
+};
 use crate::state::{
     load_mut, EtfState, MAX_BASKET_TOKENS, MAX_ETF_NAME_LEN, MAX_ETF_TICKER_LEN,
 };
@@ -23,6 +26,9 @@ use crate::state::{
 ///   1. EtfState PDA (stores basket config + metadata)
 ///   2. SPL token mint for the ETF token (EtfState PDA is mint authority)
 ///   3. Vault token accounts for each basket token (EtfState PDA is owner)
+///   4. Metaplex Token Metadata account (v1.1) — name/symbol/uri, with
+///      etfState PDA as both mint_authority and update_authority,
+///      `is_mutable = true`. See AXIS_VAULT_V1_1_SPEC.md.
 ///
 /// Accounts:
 ///   0: [signer, writable] authority (creator, pays rent)
@@ -33,12 +39,15 @@ use crate::state::{
 ///   5: []                  token_program
 ///   6..6+N: []             basket token mints
 ///   6+N..6+2N: [writable]  basket vault accounts (uninitialized)
+///   6+2N:     [writable]   metadata_pda (Metaplex; created by CPI)        ← v1.1
+///   6+2N+1:   []           metaplex_program (Token Metadata Program ID)   ← v1.1
 ///
 /// Data:
 ///   [token_count: u8]
 ///   [weights_bps: [u16 LE; N]]
-///   [ticker_len: u8][ticker: bytes (2..=16, ASCII upper/digit)]
+///   [ticker_len: u8][ticker: bytes (2..=10, ASCII upper/digit)]   ← v1.1: cap is 10 (Metaplex symbol max)
 ///   [name_len: u8][name: bytes (1..=32, UTF-8; also used as PDA seed)]
+///   [uri_len: u8][uri: bytes (0..=200, Metaplex MAX_URI_LENGTH)]  ← v1.1
 pub fn process_create_etf(
     program_id: &Pubkey,
     accounts: &[AccountInfo],
@@ -46,6 +55,7 @@ pub fn process_create_etf(
     weights_bps: &[u16],
     ticker: &[u8],
     name: &[u8],
+    uri: &[u8],
 ) -> ProgramResult {
     let tc = token_count as usize;
     if tc < 2 || tc > MAX_BASKET_TOKENS {
@@ -69,11 +79,14 @@ pub fn process_create_etf(
         return Err(VaultError::InvalidName.into());
     }
 
-    // Ticker: 2..=16 bytes, ASCII uppercase A-Z or digits 0-9. Mirrors
-    // traditional-finance ticker conventions; no lowercase, spaces, or
-    // symbols. Reject here rather than silently normalizing so on-chain
-    // state is a faithful record of what the creator signed.
-    if ticker.len() < 2 || ticker.len() > MAX_ETF_TICKER_LEN {
+    // Ticker: 2..=10 bytes (v1.1 cap, Metaplex `MAX_SYMBOL_LENGTH`),
+    // ASCII uppercase A-Z or digits 0-9. v1.0 used a 16-byte cap; the
+    // 16-byte storage slot in `EtfState.ticker` stays for backwards
+    // compat with v1.0 ETFs but new CreateEtf calls are bounded by
+    // Metaplex so the CreateMetadataAccountV3 CPI never fails late
+    // with `SymbolTooLong`. Real-world creator tickers are ~6 chars
+    // so this is non-disruptive.
+    if ticker.len() < 2 || ticker.len() > MAX_SYMBOL_LENGTH {
         return Err(VaultError::InvalidTicker.into());
     }
     for &b in ticker {
@@ -84,7 +97,16 @@ pub fn process_create_etf(
         }
     }
 
-    let min_accounts = 6 + tc * 2;
+    // URI bound is re-asserted in `invoke_create_metadata_v3`, but
+    // checking here keeps the error site close to the input parsing
+    // (and saves the Metaplex CPI's prelude cost on bad input).
+    if uri.len() > crate::metaplex::MAX_URI_LENGTH {
+        return Err(VaultError::InvalidUri.into());
+    }
+
+    // v1.1 adds `metadata_pda` + `metaplex_program` as accounts
+    // 6+2N and 6+2N+1.
+    let min_accounts = 6 + tc * 2 + 2;
     if accounts.len() < min_accounts {
         return Err(ProgramError::NotEnoughAccountKeys);
     }
@@ -230,6 +252,46 @@ pub fn process_create_etf(
         etf.created_at_slot = created_at_slot;
         etf._padding = [0; 4];
     }
+
+    // ─── v1.1: Metaplex Token Metadata CPI ─────────────────────────
+    // Append CreateMetadataAccountV3 against the deployed Metaplex
+    // program with etfState PDA signing as mint_authority. Same
+    // signer seeds we used for `CreateAccount` above — `Seed`
+    // borrows from `name`/`bump_seed`/`authority.key()` which are
+    // all still alive on the stack here.
+    let metadata_pda_ai = &accounts[6 + tc * 2];
+    let metaplex_program_ai = &accounts[6 + tc * 2 + 1];
+
+    // Metaplex PDA derivation: [b"metadata", metaplex_program_id, etf_mint].
+    // Re-derive on-chain so a malicious caller can't pass a PDA they
+    // control as the metadata slot.
+    let metaplex_pid_pubkey = unsafe {
+        &*(&METAPLEX_TOKEN_METADATA_PROGRAM_ID as *const [u8; 32] as *const Pubkey)
+    };
+    let (expected_metadata_pda, _meta_bump) = pubkey::find_program_address(
+        &[
+            b"metadata",
+            METAPLEX_TOKEN_METADATA_PROGRAM_ID.as_ref(),
+            etf_mint_ai.key().as_ref(),
+        ],
+        metaplex_pid_pubkey,
+    );
+    if metadata_pda_ai.key() != &expected_metadata_pda {
+        return Err(VaultError::InvalidMetadataPda.into());
+    }
+
+    invoke_create_metadata_v3(
+        metaplex_program_ai,
+        metadata_pda_ai,
+        etf_mint_ai,
+        etf_state_ai,
+        authority,
+        _sys,
+        name,
+        ticker,
+        uri,
+        &etf_signer_seeds,
+    )?;
 
     Ok(())
 }

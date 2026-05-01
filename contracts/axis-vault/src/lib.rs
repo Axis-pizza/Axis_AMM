@@ -17,6 +17,7 @@ pub mod constants;
 pub mod error;
 pub mod instructions;
 pub mod jupiter;
+pub mod metaplex;
 pub mod state;
 
 use pinocchio::{
@@ -80,16 +81,20 @@ pub fn process_instruction(
 
     match disc {
         Instruction::CreateEtf => {
-            // Data layout (#37):
+            // Data layout (#37, v1.1):
             //   [token_count: u8]
             //   [weights: [u16 LE; N]]
             //   [ticker_len: u8][ticker: bytes]
             //   [name_len: u8][name: bytes]
+            //   [uri_len: u8][uri: bytes]                ← v1.1
             //
             // Ticker is laid out before name so clients can parse the
-            // metadata in one forward pass. All length-prefixed fields
-            // are u8-prefixed (16/32 byte maxima enforced by the
-            // instruction handler).
+            // metadata in one forward pass. URI is appended last for
+            // additive compat — v1.0 clients hitting v1.1 fail loud
+            // on the missing `uri_len` byte before any state writes.
+            // All length-prefixed fields are u8-prefixed; enforcement
+            // of Metaplex maxima (32 / 10 / 200) lives in the
+            // instruction handler.
             if data.is_empty() {
                 return Err(ProgramError::InvalidInstructionData);
             }
@@ -116,13 +121,21 @@ pub fn process_instruction(
             let name_len_off = ticker_start + ticker_len;
             let name_len = data[name_len_off] as usize;
             let name_start = name_len_off + 1;
-            if data.len() < name_start + name_len {
+            if data.len() < name_start + name_len + 1 {
                 return Err(ProgramError::InvalidInstructionData);
             }
             let name = &data[name_start..name_start + name_len];
 
+            let uri_len_off = name_start + name_len;
+            let uri_len = data[uri_len_off] as usize;
+            let uri_start = uri_len_off + 1;
+            if data.len() < uri_start + uri_len {
+                return Err(ProgramError::InvalidInstructionData);
+            }
+            let uri = &data[uri_start..uri_start + uri_len];
+
             instructions::process_create_etf(
-                program_id, accounts, token_count, &weights[..tc], ticker, name,
+                program_id, accounts, token_count, &weights[..tc], ticker, name, uri,
             )
         }
 

@@ -91,6 +91,22 @@ pub enum VaultError {
     /// beyond the user's pro-rata claim. Bound is checked post-CPI
     /// on each vault's input-side delta.
     ExcessVaultDrain = 9036,
+    /// CreateEtf v1.1: the `metaplex_program` account does not match
+    /// `metaplex::METAPLEX_TOKEN_METADATA_PROGRAM_ID`. Closes the
+    /// arbitrary-CPI vector — without this check a spoofed metadata
+    /// program could simulate the create + return success while
+    /// leaving the ETF mint metadata-less (or worse, writing into a
+    /// PDA the spoofed program controls).
+    InvalidMetaplexProgram = 9037,
+    /// CreateEtf v1.1: the `metadata_pda` account does not derive from
+    /// `[b"metadata", METAPLEX_PROGRAM_ID, etf_mint]`. Re-derived
+    /// on-chain via `find_program_address` and compared before CPI.
+    InvalidMetadataPda = 9038,
+    /// CreateEtf v1.1: the supplied `uri` exceeds Metaplex's
+    /// `MAX_URI_LENGTH` (200). Caught client-side under normal
+    /// flows, but the program revalidates so a hand-crafted ix
+    /// can't slip past.
+    InvalidUri = 9039,
 }
 
 impl From<VaultError> for ProgramError {

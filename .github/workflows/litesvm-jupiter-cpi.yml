@@ -64,12 +64,17 @@ jobs:
       # pfda-amm is now exercised by tests/pfda_amm_coverage.rs in the
       # ab-integration-tests crate, so build its .so alongside the g3m
       # and pfda-amm-3 binaries the existing test suite loads.
+      #
+      # axis-vault is built with `e2e-disable-treasury-gate` so the
+      # `protocol_treasury_is_active()` gate stays inert and tests can
+      # use throwaway treasuries (mirrors `ci/e2e-local-prepare.sh`).
+      # The verifiable mainnet build never enables this feature.
       - name: Build SBF programs
         run: |
           cd contracts/axis-g3m && cargo build-sbf
           cd ../pfda-amm-3 && cargo build-sbf
           cd ../pfda-amm && cargo build-sbf
-          cd ../axis-vault && cargo build-sbf
+          cd ../axis-vault && cargo build-sbf --features e2e-disable-treasury-gate
 
       - name: Verify committed Jupiter V6 fixture
         # Same rationale as in main-report.yml: the binary is committed
@@ -129,6 +134,23 @@ jobs:
         run: |
           cd contracts/ab-integration-tests
           cargo test --test pfda3_claim_coverage -- --nocapture
+
+      # axis-vault v1.1 CreateEtf CPIs into Metaplex Token Metadata. The
+      # validation-only tests fail before any CPI fires, but
+      # `deposit_second_depositor_mints_proportional_amount` exercises a
+      # real CreateEtf and needs Metaplex loaded. Dump the deployed
+      # program once into the fixtures dir; the test loads it via
+      # `MPL_TOKEN_METADATA_SO`.
+      - name: Dump Metaplex Token Metadata fixture
+        run: |
+          fixture=contracts/ab-integration-tests/fixtures/mpl_token_metadata.so
+          if [[ ! -s "${fixture}" ]]; then
+            mkdir -p "$(dirname "${fixture}")"
+            solana program dump \
+              -u https://api.mainnet-beta.solana.com \
+              metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s \
+              "${fixture}"
+          fi
 
       # axis-vault — CreateEtf data-validation branches (basket size, weights,
       # ticker, name). All fire before any CPI so no SPL setup required.

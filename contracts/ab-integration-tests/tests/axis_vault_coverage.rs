@@ -37,6 +37,19 @@ fn create_etf_data(
     ticker: &[u8],
     name: &[u8],
 ) -> Vec<u8> {
+    create_etf_data_with_uri(token_count, weights_bps, ticker, name, b"")
+}
+
+/// v1.1 wire format. Validation-only tests use empty URI; the real
+/// CreateEtf in `deposit_second_depositor_*` uses a real URI to also
+/// exercise the borsh string layout in metaplex.rs.
+fn create_etf_data_with_uri(
+    token_count: u8,
+    weights_bps: &[u16],
+    ticker: &[u8],
+    name: &[u8],
+    uri: &[u8],
+) -> Vec<u8> {
     let mut data = vec![0u8]; // disc = 0 (CreateEtf)
     data.push(token_count);
     for w in weights_bps {
@@ -46,6 +59,9 @@ fn create_etf_data(
     data.extend_from_slice(ticker);
     data.push(name.len() as u8);
     data.extend_from_slice(name);
+    // v1.1: uri after name. Empty (uri_len=0) is valid.
+    data.push(uri.len() as u8);
+    data.extend_from_slice(uri);
     data
 }
 
@@ -611,6 +627,7 @@ fn create_etf_ix(
     weights_bps: &[u16],
     ticker: &[u8],
     name: &[u8],
+    uri: &[u8],
 ) -> Instruction {
     let mut data = vec![0u8];
     data.push(token_count);
@@ -621,6 +638,9 @@ fn create_etf_ix(
     data.extend_from_slice(ticker);
     data.push(name.len() as u8);
     data.extend_from_slice(name);
+    // v1.1: uri after name.
+    data.push(uri.len() as u8);
+    data.extend_from_slice(uri);
 
     let mut accts = vec![
         AccountMeta::new(authority, true),
@@ -636,15 +656,21 @@ fn create_etf_ix(
     for v in basket_vaults {
         accts.push(AccountMeta::new(*v, false));
     }
+    // v1.1: metadata_pda + metaplex_program tail-appended.
+    accts.push(AccountMeta::new(metadata_pda_for(&etf_mint), false));
+    accts.push(AccountMeta::new_readonly(mpl_token_metadata_id(), false));
     Instruction { program_id: axis_vault_id(), accounts: accts, data }
 }
 
 #[test]
 fn deposit_second_depositor_mints_proportional_amount() {
     require_fixture!(AXIS_VAULT_SO);
+    require_fixture!(MPL_TOKEN_METADATA_SO); // v1.1 CreateEtf CPIs into Metaplex
     let mut svm = LiteSVM::new();
     if !std::path::Path::new(AXIS_VAULT_SO).exists() { return; }
     svm.add_program_from_file(axis_vault_id(), AXIS_VAULT_SO).unwrap();
+    svm.add_program_from_file(mpl_token_metadata_id(), MPL_TOKEN_METADATA_SO)
+        .unwrap();
 
     let payer = Keypair::new();
     svm.airdrop(&payer.pubkey(), 100 * LAMPORTS_PER_SOL).unwrap();
@@ -688,12 +714,13 @@ fn deposit_second_depositor_mints_proportional_amount() {
     );
 
     // Real CreateEtf — drives InitializeMint2 + InitializeAccount3 x3
-    // + SystemCreateAccount for etf_state.
+    // + SystemCreateAccount for etf_state + Metaplex CreateMetadataAccountV3.
     send(
         &mut svm,
         create_etf_ix(
             payer.pubkey(), etf_state, etf_mint, treasury,
             &basket_mints, &vaults, 3, &weights, &ticker, &name,
+            b"https://axis.test/etf/prop.json", // v1.1 uri
         ),
         &payer,
     )

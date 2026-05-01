@@ -9,12 +9,14 @@
   "anchorCompatible": false,
   "description": "Manual IDL for the Pinocchio axis-vault program. Instruction data uses a one-byte discriminator followed by the layouts below. v1.1 adds Metaplex Token Metadata CPI to CreateEtf — see docs/architecture/AXIS_VAULT_V1_1_SPEC.md.",
   "metadata": {
-    "deployedAtSlot": 416272971,
-    "deploySignature": "2TBxweDiUk96FAY9hmmPD9cEPcT6NUAsZEbEkvvWQiNLagukYfni7TyZzh3u5CdEHPk9f3Jb9DRbLt6R6wvsMHBY",
+    "deployedAtSlot": 416846312,
+    "deploySignature": "7X6RBFxfE4MC6F8ik1Fa3GsQhLwNT4rKHLFzAJVmfJjP8STSnfAXvq3qJQMEssUS2QtykuScMVhkMrnEHtgGwdZ",
     "programData": "6szAV5iFQKzJ7BuYZipSeWc3thauWCVi9q26k1WQEjrt",
     "upgradeAuthority": "BtjuCMkLC9MuzagvGSS9E26XjMNTBR6isj8e1xVyeak6",
     "protocolTreasury": "BtjuCMkLC9MuzagvGSS9E26XjMNTBR6isj8e1xVyeak6",
-    "sbfSha256": "bdad2e1ed2248618b624625318c653b4b29dc78442b8d2ca042e087b147439a0"
+    "sbfSha256": "05db44d934fccd2e2268feeb130a1ef7c6742700249ce7710a875f1b95a3f688",
+    "extendProgramSignature": "3rrqc4PHfXeKU6eKA9WgN4h7YQz9bk73pEKZwxc1jCG1jbAUnpvDKkcLPUJ8iergz7WtVjCEwe8WpwqmWm5GKLtE",
+    "programDataLength": 112848
   },
   "pdas": [
     {

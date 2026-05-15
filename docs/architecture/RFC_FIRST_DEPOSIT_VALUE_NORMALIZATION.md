@@ -1,12 +1,26 @@
-# RFC: First-deposit value normalization (axis-vault v1.2)
+# RFC + Review: Muse 2026-05-15 ETF deposit report (3 issues)
 
-Status: **PROPOSAL — needs Muse sign-off before any program change.**
-Scope: `contracts/axis-vault` (OtterSec-verified, mainnet `Agae3WetHx7J9CE7nP927ekzAeegSKE1KfkZDMYLDGHX`). No code applied by this RFC.
-Author context: filed in response to Muse's 2026-05-15 bug report ("wBTC/wETH baskets require too much SOL for the initial deposit").
+Status: **PROPOSAL + status review — needs Muse sign-off before any program change.**
+Scope: `contracts/axis-vault` (OtterSec-verified, mainnet `Agae3WetHx7J9CE7nP927ekzAeegSKE1KfkZDMYLDGHX`) for the program change; consumer app `Axis_Mainnet/axis-agent` + `axis-api` for the client/back-end fixes. **No program code is applied by this RFC.**
+Author context: filed in response to Muse's 2026-05-15 report. Originally a single-issue RFC for the SOL-floor bug; expanded so all three reported items are reviewable in one place.
+
+> **One-PR-per-repo reality:** the durable Bug 1 program fix is a proposal in *this* repo (Axis_AMM PR #72, RFC only, no Rust). The interim Bug 1 client mitigation, the Bug 2 fix, and the Bug 3 fix are **written code sitting in Axis_Mainnet PR #4 (consumer repo) — OPEN, unmerged, not in any `main`.** Nothing in this report is live yet.
 
 ---
 
-## 1. Problem
+## 0. Summary for Muse
+
+| # | Muse's report | Real cause | Status | Where the code is | Needs from Muse |
+|---|---------------|-----------|--------|-------------------|-----------------|
+| 1 | wBTC/wETH baskets require too much SOL for the initial deposit | Program design: first-deposit `amount` is one raw-base-unit scalar across mixed-decimal/price tokens vs. a fixed 1.0-ETF floor | Interim client mitigation written (~10× reduction); durable program fix is a **proposal only** | Interim: Axis_Mainnet PR #4 (`jupiterSeed.ts`). Durable: this RFC §3–§5, no code yet | Answer §6 open questions, then approve writing the v1.2 program patch |
+| 2 | Spot swaps land in wallet instead of a single ETF token | Single-token *is* implemented; defect is a fragile name-keyed vault/spot decision that **silently falls back to Jupiter-spot-into-wallet** on RPC/decode failure | Fix written | Axis_Mainnet PR #4 (`etfState.ts` tri-state + guards) | Review + merge PR #4 |
+| 3 | ETF logo upload doesn't take | Upload UI exists but create hardcodes `uri:''`; `axis-api` `/metadata/:ticker` returns a **hardcoded** logo URL | Fix written, **not runtime-tested** | Axis_Mainnet PR #4 (FE upload wiring + `axis-api` per-ETF metadata) | Review + merge PR #4; accept that e2e needs a real deploy tx |
+
+**Decision checklist** is consolidated in §7.
+
+---
+
+## 1. Issue 1 — Problem
 
 Muse: *"When assets like wBTC or wETH are included, the app ends up requiring too much SOL for the initial deposit."*
 
@@ -44,13 +58,15 @@ Basket tokens have wildly different (decimals, price). wBTC/wETH are 8-decimal, 
 
 This is intrinsic to `amount` being a shared raw-base-unit scalar across heterogeneous-decimal tokens with a fixed base-unit floor.
 
-## 2. Interim mitigation already shipped (client-only, no redeploy)
+## 2. Issue 1 — Interim mitigation already written (client-only, no redeploy)
 
-`Axis_Mainnet/axis-agent` — `jupiterSeed.ts` now reallocates the same total SOL across legs to **equalize per-leg deposit candidates** instead of bottlenecking on the lowest-base-unit leg (`buildJupiterSeedPreview` + `reallocateEqualizingCandidates`). Verified with the repo's mock Jupiter client: on a realistic 3-leg basket with a low-weight wBTC-like leg the required seed dropped ~**10×**; on a 2-equal-leg basket ~2× (the structural ceiling for that shape).
+> Lives in **Axis_Mainnet PR #4 — OPEN, unmerged.** Not live until that PR merges.
 
-This makes the seed the *true minimum* SOL to mint a legal first deposit, but it **cannot** make 1.0 ETF cheap when a high-value 8-decimal token sits at a meaningful weight — the USD value of `1_000_000 × weight_wbtc / 10_000` base units of wBTC is intrinsically large. That residual is what this RFC addresses.
+`Axis_Mainnet/axis-agent` — `jupiterSeed.ts` now reallocates the same total SOL across legs to **equalize per-leg deposit candidates** instead of bottlenecking on the lowest-base-unit leg (`buildJupiterSeedPreview` + `reallocateEqualizingCandidates`). Verified with the repo's mock Jupiter client (`axis-agent/scripts/verify-seed-equalize.ts`): on a realistic 3-leg basket with a low-weight wBTC-like leg the required seed dropped ~**10×**; on a 2-equal-leg basket ~2× (the structural ceiling for that shape). tsc clean. Not runtime-tested against live Jupiter.
 
-## 3. Options
+This makes the seed the *true minimum* SOL to mint a legal first deposit, but it **cannot** make 1.0 ETF cheap when a high-value 8-decimal token sits at a meaningful weight — the USD value of `1_000_000 × weight_wbtc / 10_000` base units of wBTC is intrinsically large. That residual is what the program change below addresses.
+
+## 3. Issue 1 — Options (program change)
 
 | # | Change | Pros | Cons |
 |---|--------|------|------|
@@ -66,7 +82,7 @@ A Switchboard on-demand price reader **already exists in this repo** and is prov
 
 Porting that reader into `axis-vault` reuses an audited pattern and adds no new crate dependency (consistent with the Pinocchio "no extra deps" rule noted in `AXIS_VAULT_V1_1_SPEC.md`).
 
-## 4. Recommended design (Option C, shipped as **v1.2**)
+## 4. Issue 1 — Recommended design (Option C, shipped as **v1.2**)
 
 **Principle:** on the first deposit, `mint_amount` = the basket's total USD value scaled to a fixed 6-decimal unit (e.g. `1 ETF ≈ $1` at genesis, configurable per ETF). Per-leg pulls stay weight-proportional **by value**, not by raw base units. The floor becomes "first deposit ≥ $X" rather than "≥ 1e6 raw units of a scalar."
 
@@ -80,7 +96,7 @@ Porting that reader into `axis-vault` reuses an audited pattern and adds no new 
 
 - New behavior gated to **new** ETFs created under v1.2 (mirrors the v1.1 approach: `AXIS_VAULT_V1_1_SPEC.md:131` — "v1.1 only affects new CreateEtf calls. No off-chain backfill, no per-ETF migration tx."). Existing v1.1 ETFs keep current semantics.
 - Wire-format bump tracked in `MAINNET_SCOPE.md` change-log as a deliberate breaking change (same discipline as the v1.1 `uri_len` addition, `AXIS_VAULT_V1_1_SPEC.md:121`).
-- Client (`axis-agent`) deposit/seed plan switches to value math for v1.2 ETFs; the v1.3-equalizer client mitigation stays as defense-in-depth.
+- Client (`axis-agent`) deposit/seed plan switches to value math for v1.2 ETFs; the client equalizer mitigation stays as defense-in-depth.
 
 ### Audit impact
 
@@ -92,10 +108,53 @@ Porting that reader into `axis-vault` reuses an audited pattern and adds no new 
 - Extend the existing LiteSVM A/B suite (`contracts/ab-integration-tests/`, already wired to v1.1 wire format + Metaplex per recent commits) with: wBTC/wETH-shaped baskets, oracle-mocked first deposits, staleness/confidence rejection, value-floor boundary, and a v1.1-vs-v1.2 differential to prove subsequent-deposit math is unchanged.
 - Mainnet dry-run on a throwaway ETF before announcing.
 
-## 5. Open questions for Muse
+## 5. Issue 2 — Spot swaps into wallet vs. single ETF token
 
-1. **Genesis price unit** — fix `1 ETF = $1` at first deposit, or let the creator set it?
-2. **Floor** — replace `MIN_FIRST_DEPOSIT` with `MIN_FIRST_DEPOSIT_USD` (e.g. $10/$25)? Value affects dust-attack economics.
-3. **Storage** — side `EtfOracleConfig` PDA (no discriminator bump, recommended) vs. extend `EtfState` (cleaner reads, forces a layout/version bump)?
-4. **Sequencing** — is the shipped client equalizer (≈10× reduction on realistic baskets) enough to unblock the demo while v1.2 goes through audit, or is C needed before launch?
-5. **Oracle coverage** — confirm Switchboard on-demand feeds exist for every mint we intend to allow in baskets (wBTC, wETH, majors). Mints without a feed would be rejected at `CreateEtf` under v1.2.
+Muse: *"deposits should produce a single ETF token, not spot swaps into the wallet."*
+
+**Single-ETF-token is already implemented** — this is a fragile-fallback bug, not a missing feature.
+
+### Verified behavior (Axis_Mainnet/axis-agent @ `7443591`, 2026-05-15)
+
+- Create runs `ixCreateEtf` (one SPL mint + Metaplex metadata + vaults), then vault `Deposit` mints the ETF token (`PfmmDeploymentBlueprint.tsx:569,971`).
+- Swipe BUY is axis-vault-first and bounces PFMM-only baskets to the detail view (`SwipeDiscoverView.tsx:1147-1160`; the `else if (isPfmm)` Jupiter-to-wallet branch at :1271 is unreachable from there).
+- **The real defect:** the vault-vs-spot decision keys off an `etfState` PDA derived from `owner + strategy.name` (`SwipeDiscoverView.tsx:784`, `StrategyDetailView.tsx:838,908`). A name mismatch *or* an RPC/decode failure makes the lookup look "absent", and the code **silently falls back to Jupiter spot-swap into the wallet** (`StrategyDetailView.tsx:833` comment). That is exactly the symptom Muse saw.
+
+### Fix written (Axis_Mainnet PR #4 — OPEN, unmerged)
+
+- New `etfState.ts` `classifyEtfState` returns an explicit **tri-state**: `present` / `absent` / `error`.
+- Guards in `SwipeDiscoverView.tsx` and `StrategyDetailView.tsx` so a real ETF whose state lookup *errored* (RPC/decode) is never treated as "no vault → spot-swap into wallet". `error` blocks the spot fallback instead of silently degrading. tsc clean. Not runtime-tested.
+
+Open question for Muse: confirm desired UX when the vault PDA genuinely can't be resolved after retries — hard-fail with a visible error (current PR behavior), or queue/retry?
+
+## 6. Issue 3 — ETF logo upload
+
+Muse: *"uploaded ETF logos don't show up."*
+
+### Verified behavior (2026-05-15)
+
+- `ImageUpload.tsx` + `api.uploadImage` exist, but create hardcodes `uri:''` (`PfmmDeploymentBlueprint.tsx:580`) — the uploaded image is never threaded into `ixCreateEtf`.
+- `axis-api/src/routes/misc.ts:27` `/metadata/:ticker` returns Metaplex JSON with a **hardcoded** `image: LOGO_URL` (`app.axis-protocol.xyz/ETFtoken.png`) — it ignores any upload. `POST /upload/image` returns a raw image URL, not metadata JSON. So even a correct upload could never surface.
+
+### Fix written (Axis_Mainnet PR #4 — OPEN, unmerged)
+
+- FE: `ImageUpload` in the create identity step → `StrategyConfig.logoUrl` → `etfMetadataUri()` → set as the `ixCreateEtf` `uri` → persisted via `persistMetadata`.
+- `axis-api`: new `/metadata/mint/:mint` serves the stored logo from `strategies.config` JSON; `/deploy` stores `logoUrl`. **No DB schema migration** (reuses existing `config` JSON column).
+- Both repos tsc-clean on changed files.
+- **NOT runtime-tested**: requires a real on-chain `CreateEtf` tx + wallet/explorer check + a live D1 instance. Cannot be validated from the contracts repo. Flag this explicitly to Muse — "code complete" ≠ "logo verified on an explorer."
+
+## 7. Consolidated decision checklist for Muse
+
+**A. Merge / review (no program risk):**
+1. Review and merge **Axis_Mainnet PR #4** — it carries the entire interim Bug 1 mitigation + Bug 2 fix + Bug 3 fix. Nothing in §2/§5/§6 is live until this merges.
+2. Accept that Bug 3 ships "code complete, not e2e-tested" (needs a real deploy tx). OK to merge on that basis?
+3. Bug 2 UX call: hard-fail on unresolvable vault PDA (current PR behavior) vs. retry/queue?
+
+**B. Program change (needs sign-off before any Rust is written):**
+4. **Genesis price unit** — fix `1 ETF = $1` at first deposit, or let the creator set it?
+5. **Floor** — replace `MIN_FIRST_DEPOSIT` with `MIN_FIRST_DEPOSIT_USD` (e.g. $10/$25)? Value affects dust-attack economics.
+6. **Storage** — side `EtfOracleConfig` PDA (no discriminator bump, recommended) vs. extend `EtfState` (cleaner reads, forces a layout/version bump)?
+7. **Sequencing** — is the shipped client equalizer (~10× reduction on realistic baskets) enough to unblock the demo while v1.2 goes through audit, or is Option C needed before launch?
+8. **Oracle coverage** — confirm Switchboard on-demand feeds exist for every mint we intend to allow (wBTC, wETH, majors). Mints without a feed would be rejected at `CreateEtf` under v1.2.
+
+Only after items 4–8 are answered does anyone write the v1.2 program patch. This RFC deliberately ships **zero** Rust.

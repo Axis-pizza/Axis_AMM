@@ -975,3 +975,294 @@ fn g3m_set_paused_rejects_non_authority() {
     assert_custom_err(&err, G3M_ERR_UNAUTHORIZED, "non-authority g3m");
     assert_eq!(svm.get_account(&pool).unwrap().data[paused_offset], 0);
 }
+
+// ─── H1 happy path: WithdrawFees succeeds when dest is treasury-owned ──
+//
+// The rejection tests above prove the guard fires. This positive test
+// proves the guard doesn't block legitimate authority-signed withdrawals
+// to token accounts owned by the pool treasury.
+
+struct Pfda3WithTreasury {
+    svm: LiteSVM,
+    payer: Keypair,
+    pool: Address,
+    mints: [Address; 3],
+    vaults: [Address; 3],
+    treasury: Address,
+}
+
+fn seed_pfda3_pool_with_treasury() -> Option<Pfda3WithTreasury> {
+    let mut svm = LiteSVM::new();
+    if !std::path::Path::new(PFDA_AMM_3_SO).exists() {
+        eprintln!("SKIP: pfda_amm_3.so fixture missing");
+        return None;
+    }
+    svm.add_program_from_file(pfda3_id(), PFDA_AMM_3_SO).ok()?;
+
+    let payer = Keypair::new();
+    svm.airdrop(&payer.pubkey(), 100 * LAMPORTS_PER_SOL).unwrap();
+
+    let mints = [Address::new_unique(), Address::new_unique(), Address::new_unique()];
+    for &m in &mints {
+        create_mint(&mut svm, m, &payer.pubkey(), 6);
+    }
+
+    let (pool, pool_bump) = Address::find_program_address(
+        &[b"pool3", mints[0].as_ref(), mints[1].as_ref(), mints[2].as_ref()],
+        &pfda3_id(),
+    );
+
+    let vaults = [Address::new_unique(), Address::new_unique(), Address::new_unique()];
+    for i in 0..3 {
+        create_token_account(&mut svm, vaults[i], &mints[i], &pool, 1_000_000);
+    }
+
+    let treasury = Address::new_unique();
+    let pd = build_pfda3_pool_state(
+        &mints,
+        &vaults,
+        &[1_000_000; 3],
+        &[333_333, 333_333, 333_334],
+        10,
+        0,
+        100,
+        &treasury,
+        &payer.pubkey(),
+        30,
+        pool_bump,
+    );
+    svm.set_account(
+        pool,
+        Account {
+            lamports: LAMPORTS_PER_SOL,
+            data: pd,
+            owner: pfda3_id(),
+            executable: false,
+            rent_epoch: 0,
+        },
+    )
+    .unwrap();
+
+    Some(Pfda3WithTreasury { svm, payer, pool, mints, vaults, treasury })
+}
+
+/// H1 positive path: authority-signed WithdrawFees to treasury-owned
+/// destination accounts must succeed (H1 guard passes, no error).
+#[test]
+fn pfda3_withdraw_fees_treasury_dest_succeeds() {
+    require_fixture!(PFDA_AMM_3_SO);
+    let Pfda3WithTreasury { mut svm, payer, pool, mints, vaults, treasury } =
+        match seed_pfda3_pool_with_treasury() { Some(f) => f, None => return };
+
+    // Create three destination token accounts owned BY the pool treasury.
+    // The H1 guard checks tdata[32..64] == pool.treasury — these pass.
+    let dests = [
+        Address::new_unique(),
+        Address::new_unique(),
+        Address::new_unique(),
+    ];
+    for i in 0..3 {
+        create_token_account(&mut svm, dests[i], &mints[i], &treasury, 0);
+    }
+
+    let cu = send(
+        &mut svm,
+        pfda3_withdraw_fees_ix(
+            payer.pubkey(), // == pool.authority
+            pool,
+            &vaults,
+            &dests,
+            [50_000, 0, 0], // withdraw only from vault[0]; within reserves
+        ),
+        &payer,
+    )
+    .expect("withdraw_fees to treasury-owned dest must succeed");
+
+    assert!(cu > 0, "expected non-zero CU, got {}", cu);
+}
+
+// ─── H3 happy path: ClearBatch with fresh oracle feeds by non-authority ─
+//
+// H3 gates the no-feed path to the authority, but feed-supplied cranking
+// remains permissionless. This test proves a random cranker can clear
+// when three fresh Switchboard feeds are present.
+
+/// Build a synthetic Switchboard PullFeedAccountData blob.
+/// Offsets verified against contracts/pfda-amm-3/src/oracle.rs:
+///   [0..8]       PULL_FEED_DISCRIMINATOR
+///   [1272..1288] CurrentResult.value (i128 LE, scaled 1e18)
+///   [1336]       CurrentResult.num_samples (u8)
+///   [1344..1352] CurrentResult.slot (u64 LE)
+///   total size   1360 bytes
+fn build_switchboard_feed(price_q_1e18: i128, slot: u64, samples: u8) -> Vec<u8> {
+    const SIZE: usize = 1360;
+    let mut d = vec![0u8; SIZE];
+    // PULL_FEED_DISCRIMINATOR = sha256("account:PullFeedAccountData")[0..8]
+    d[0..8].copy_from_slice(&[0xc4, 0x1b, 0x6c, 0xc4, 0x0a, 0xd7, 0xdb, 0x28]);
+    // result.value: i128 at offset 1272
+    d[1272..1288].copy_from_slice(&price_q_1e18.to_le_bytes());
+    // result.num_samples: u8 at offset 1336
+    d[1336] = samples;
+    // result.slot: u64 at offset 1344
+    d[1344..1352].copy_from_slice(&slot.to_le_bytes());
+    d
+}
+
+/// Switchboard On-Demand V3 mainnet program ID bytes.
+/// Matches SWITCHBOARD_V3_PROGRAM_ID in oracle.rs.
+const SWITCHBOARD_V3: [u8; 32] = [
+    0x06, 0x73, 0xbd, 0x46, 0xf2, 0xe4, 0x7e, 0x04,
+    0xf1, 0x2b, 0xd9, 0x2f, 0xb7, 0x31, 0x96, 0x8e,
+    0xcd, 0x9d, 0x97, 0x57, 0xc2, 0x74, 0xda, 0x87,
+    0x47, 0x6f, 0x46, 0x5c, 0x04, 0x0c, 0x65, 0x73,
+];
+
+fn pfda3_clear_batch_ix(
+    cranker: Address,
+    pool: Address,
+    queue: Address,
+    history: Address,
+    new_queue: Address,
+    bid_lamports: u64,
+    feeds: Option<[Address; 3]>,
+) -> Instruction {
+    let mut accounts = vec![
+        AccountMeta::new(cranker, true),
+        AccountMeta::new(pool, false),
+        AccountMeta::new(queue, false),
+        AccountMeta::new(history, false),
+        AccountMeta::new(new_queue, false),
+        AccountMeta::new_readonly(system_program_id(), false),
+    ];
+    if let Some(fs) = feeds {
+        for f in &fs {
+            accounts.push(AccountMeta::new_readonly(*f, false));
+        }
+    }
+    let mut data = vec![2u8]; // ClearBatch3 discriminator (pfda-amm-3 lib.rs: ClearBatch = 2)
+    data.extend_from_slice(&bid_lamports.to_le_bytes());
+    Instruction {
+        program_id: pfda3_id(),
+        accounts,
+        data,
+    }
+}
+
+/// H3 positive path: a non-authority cranker may clear a batch when
+/// three fresh Switchboard oracle feeds are supplied (accounts 6/7/8).
+#[test]
+fn pfda3_clear_batch_with_feeds_by_non_authority_succeeds() {
+    require_fixture!(PFDA_AMM_3_SO);
+
+    let mut svm = LiteSVM::new();
+    svm.add_program_from_file(pfda3_id(), PFDA_AMM_3_SO)
+        .expect("failed to load pfda_amm_3.so");
+
+    // Pool authority (not the cranker)
+    let payer = Keypair::new();
+    svm.airdrop(&payer.pubkey(), 100 * LAMPORTS_PER_SOL).unwrap();
+
+    let mints = [Address::new_unique(), Address::new_unique(), Address::new_unique()];
+    for &m in &mints {
+        create_mint(&mut svm, m, &payer.pubkey(), 6);
+    }
+
+    let (pool, pool_bump) = Address::find_program_address(
+        &[b"pool3", mints[0].as_ref(), mints[1].as_ref(), mints[2].as_ref()],
+        &pfda3_id(),
+    );
+
+    let vaults = [Address::new_unique(), Address::new_unique(), Address::new_unique()];
+    for i in 0..3 {
+        create_token_account(&mut svm, vaults[i], &mints[i], &pool, 1_000_000);
+    }
+
+    let treasury = Address::new_unique();
+    // Pool with current_batch_id=0, current_window_end=100; we will warp to slot 200.
+    let pd = build_pfda3_pool_state(
+        &mints,
+        &vaults,
+        &[1_000_000; 3],
+        &[333_333, 333_333, 333_334],
+        10,   // window_slots
+        0,    // current_batch_id
+        100,  // current_window_end — slot 200 > 100 so window has ended
+        &treasury,
+        &payer.pubkey(),
+        30,
+        pool_bump,
+    );
+    svm.set_account(
+        pool,
+        Account {
+            lamports: LAMPORTS_PER_SOL,
+            data: pd,
+            owner: pfda3_id(),
+            executable: false,
+            rent_epoch: 0,
+        },
+    )
+    .unwrap();
+
+    // Warp to slot 200 — past window_end=100, feeds at slot 200 are fresh
+    // (current_slot - feed_slot = 0 ≤ max_stale_slots=100).
+    warp_to_slot(&mut svm, 200);
+
+    // Seed the (now window-ended) batch queue for batch 0
+    let queue = seed_batch_queue_pfda3(&mut svm, pool, 0, 100);
+
+    // Derive history3 (batch 0) and new_queue (batch 1) PDAs
+    let (history3, _) = Address::find_program_address(
+        &[b"history3", pool.as_ref(), &0u64.to_le_bytes()],
+        &pfda3_id(),
+    );
+    let (new_queue, _) = Address::find_program_address(
+        &[b"queue3", pool.as_ref(), &1u64.to_le_bytes()],
+        &pfda3_id(),
+    );
+
+    // Seed three Switchboard feed accounts at slot 200, samples=2, positive prices.
+    // SOL-ish: 100e18, BONK-ish: 2e12 (0.000002 * 1e18), WIF-ish: 3e15.
+    let feed_prices: [i128; 3] = [
+        100_000_000_000_000_000_000i128, // token 0: 100.0 (1e20 scaled by 1e18 = 100)
+        2_000_000_000_000i128,           // token 1: 0.000002 (representative small price)
+        3_000_000_000_000_000i128,       // token 2: 0.003
+    ];
+    let feed_addrs = [Address::new_unique(), Address::new_unique(), Address::new_unique()];
+    for i in 0..3 {
+        let feed_data = build_switchboard_feed(feed_prices[i], 200, 2);
+        svm.set_account(
+            feed_addrs[i],
+            Account {
+                lamports: LAMPORTS_PER_SOL,
+                data: feed_data,
+                owner: Address::from(SWITCHBOARD_V3),
+                executable: false,
+                rent_epoch: 0,
+            },
+        )
+        .unwrap();
+    }
+
+    // Fresh cranker keypair — NOT the pool authority
+    let attacker = Keypair::new();
+    svm.airdrop(&attacker.pubkey(), 10 * LAMPORTS_PER_SOL).unwrap();
+
+    let cu = send_signed_by(
+        &mut svm,
+        pfda3_clear_batch_ix(
+            attacker.pubkey(),
+            pool,
+            queue,
+            history3,
+            new_queue,
+            0, // bid_lamports = 0 (no treasury account needed)
+            Some(feed_addrs),
+        ),
+        &attacker,
+        &attacker,
+    )
+    .expect("non-authority cranker with fresh feeds must succeed");
+
+    assert!(cu > 0, "expected non-zero CU, got {}", cu);
+}

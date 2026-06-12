@@ -56,3 +56,21 @@ impl RebalanceState {
         self.discriminator == Self::DISCRIMINATOR
     }
 }
+
+// Lock the wire layout. The TS decoder (frontend `decodeRebalanceState`)
+// and the LiteSVM test reader both hardcode these byte offsets; a field
+// or padding edit that shifts them would silently corrupt every external
+// read. Any such edit must update those offsets and these asserts in
+// lockstep.
+const _: () = {
+    use core::mem::offset_of;
+    assert!(offset_of!(RebalanceState, discriminator) == 0);
+    assert!(offset_of!(RebalanceState, etf_state) == 8);
+    assert!(offset_of!(RebalanceState, bump) == 40);
+    assert!(offset_of!(RebalanceState, window_start_slot) == 48);
+    assert!(offset_of!(RebalanceState, window_snapshot) == 56);
+    assert!(offset_of!(RebalanceState, window_sold) == 96);
+    assert!(offset_of!(RebalanceState, proposed_weights) == 136);
+    assert!(offset_of!(RebalanceState, proposal_eta_slot) == 152);
+    assert!(core::mem::size_of::<RebalanceState>() == 192);
+};

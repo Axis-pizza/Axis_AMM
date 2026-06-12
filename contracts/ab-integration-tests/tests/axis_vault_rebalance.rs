@@ -816,6 +816,133 @@ fn propose_rejects_non_authority() {
     assert_custom_err(&err, ERR_OWNER_MISMATCH, "authority gate");
 }
 
+// ─── Security hardening regressions ────────────────────────────────────
+
+/// Overwrite an SPL token account's amount (offset 64..72) in place.
+fn set_token_amount(svm: &mut LiteSVM, addr: &Address, amount: u64) {
+    let mut acc = svm.get_account(addr).expect("token account must exist");
+    acc.data[64..72].copy_from_slice(&amount.to_le_bytes());
+    svm.set_account(*addr, acc).unwrap();
+}
+
+/// Flip EtfState.paused (offset 450) in place.
+fn set_paused(svm: &mut LiteSVM, etf_state: &Address, paused: u8) {
+    let mut acc = svm.get_account(etf_state).expect("etf_state must exist");
+    acc.data[450] = paused;
+    svm.set_account(*etf_state, acc).unwrap();
+}
+
+/// A griefer can compute the sidecar PDA from the public etf_state and
+/// pre-fund it with a lamport, which makes a plain CreateAccount abort.
+/// The adopt path must take ownership anyway so rebalance/governance
+/// can't be permanently bricked for a targeted ETF.
+#[test]
+fn rebalance_state_adopts_pre_funded_sidecar() {
+    require_fixture!(AXIS_VAULT_SO);
+    require_fixture!(MOCK_JUPITER_SO);
+    let mut f = match seed(0) {
+        Some(x) => x,
+        None => return,
+    };
+    let manager = f.manager.insecure_clone();
+
+    // Grief: send lamports to the not-yet-created sidecar PDA. It is now
+    // a system-owned, zero-data account that CreateAccount would reject.
+    f.svm.airdrop(&f.rebalance_state, LAMPORTS_PER_SOL / 100).unwrap();
+
+    let ix = propose_ix(&f, f.manager.pubkey(), &[4_500, 2_750, 2_750]);
+    send(&mut f.svm, ix, &[&manager])
+        .expect("propose must adopt the pre-funded sidecar, not abort");
+
+    let acc = f.svm.get_account(&f.rebalance_state).unwrap();
+    assert_eq!(acc.owner, axis_vault_id(), "sidecar now owned by the program");
+    let (_, _, _, proposed, eta) = read_rebal(&f.svm, &f.rebalance_state);
+    assert_eq!(&proposed[..3], &[4_500u16, 2_750, 2_750], "proposal staged");
+    assert!(eta > 0, "timelock armed");
+}
+
+/// ApplyWeights must refuse while paused: Withdraw/WithdrawSol are also
+/// paused, so activating a composition change would move the target out
+/// from under holders who have no exit, defeating the timelock guarantee.
+#[test]
+fn apply_weights_rejects_when_paused() {
+    require_fixture!(AXIS_VAULT_SO);
+    require_fixture!(MOCK_JUPITER_SO);
+    let mut f = match seed(0) {
+        Some(x) => x,
+        None => return,
+    };
+    let manager = f.manager.insecure_clone();
+
+    let ix = propose_ix(&f, f.manager.pubkey(), &[4_500, 2_750, 2_750]);
+    send(&mut f.svm, ix, &[&manager]).expect("propose");
+
+    warp_to_slot(&mut f.svm, START_SLOT + WEIGHT_TIMELOCK_SLOTS + 1);
+    f.svm.expire_blockhash();
+    set_paused(&mut f.svm, &f.etf_state, 1);
+
+    let ix = apply_ix(&f, f.manager.pubkey());
+    let err = send(&mut f.svm, ix, &[&manager])
+        .err()
+        .expect("apply while paused must reject");
+    assert_custom_err(&err, ERR_POOL_PAUSED, "apply paused gate");
+
+    // Unpausing lets the matured proposal apply normally.
+    set_paused(&mut f.svm, &f.etf_state, 0);
+    f.svm.expire_blockhash();
+    let ix = apply_ix(&f, f.manager.pubkey());
+    send(&mut f.svm, ix, &[&manager]).expect("apply after unpause");
+    assert_eq!(&read_etf_weights(&f.svm, &f.etf_state)[..3], &[4_500u16, 2_750, 2_750]);
+}
+
+/// A vault empty when the window opened gets a zero turnover budget. Once
+/// it is funded, the next rebalance selling it must re-baseline the
+/// snapshot to the current balance instead of staying locked at cap=0
+/// until the window rolls.
+#[test]
+fn rebalance_rebaselines_zero_snapshot_after_funding() {
+    require_fixture!(AXIS_VAULT_SO);
+    require_fixture!(MOCK_JUPITER_SO);
+    let mut f = match seed(0) {
+        Some(x) => x,
+        None => return,
+    };
+    let manager = f.manager.insecure_clone();
+    let filler = f.filler.insecure_clone();
+
+    // token2 (mint2) is empty when the window opens.
+    set_token_amount(&mut f.svm, &f.vaults[2], 0);
+
+    // First rebalance sells token0 → buy token1, opening the window with
+    // snapshot[2] = 0. (buy must be token1: the filler source is mint1.)
+    let ix = rebalance_ix(
+        &f, f.manager.pubkey(), 0, 1, 50_000, 20_000, 50_000, 25_000,
+        f.drain_sink, f.filler_src, f.filler.pubkey(), true, f.vaults[1],
+    );
+    send(&mut f.svm, ix, &[&manager, &filler]).expect("open window with token2 empty");
+
+    // token2 is funded after the window opened.
+    set_token_amount(&mut f.svm, &f.vaults[2], 100_000);
+
+    // A mint2 sink for the sell leg's drain.
+    let sink2 = Address::new_unique();
+    create_token_account(&mut f.svm, sink2, &f.basket_mints[2], &f.manager.pubkey(), 0);
+
+    // Selling token2 (snapshot was 0) must now succeed: cap re-baselines
+    // to 100_000 → 20_000 budget, and 10_000 fits.
+    f.svm.expire_blockhash();
+    let ix = rebalance_ix(
+        &f, f.manager.pubkey(), 2, 1, 10_000, 4_000, 10_000, 5_000,
+        sink2, f.filler_src, f.filler.pubkey(), true, f.vaults[1],
+    );
+    send(&mut f.svm, ix, &[&manager, &filler])
+        .expect("funded zero-snapshot vault must be sellable, not locked at cap=0");
+
+    let (_, snapshot, sold, _, _) = read_rebal(&f.svm, &f.rebalance_state);
+    assert_eq!(snapshot[2], 100_000, "snapshot re-baselined from 0 to current balance");
+    assert_eq!(sold[2], 10_000, "consumption charged against the re-baselined budget");
+}
+
 // Field-use suppressor for fixture members kept for future tests.
 #[allow(dead_code)]
 fn _fixture_field_uses(f: &RebalanceFixture) {

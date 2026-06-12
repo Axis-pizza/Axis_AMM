@@ -80,6 +80,12 @@ pub fn process_propose_weights(
     if authority.key().as_ref() != &stored_auth {
         return Err(VaultError::OwnerMismatch.into());
     }
+    // Defensive bound: the loops and `staged[..token_count]` copy below
+    // index fixed `[_; 5]` storage. CreateEtf caps token_count at 5;
+    // guard anyway since `load` does not re-validate the stored byte.
+    if token_count < 2 || token_count > MAX_BASKET_TOKENS {
+        return Err(VaultError::InvalidBasketSize.into());
+    }
     if new_weights.len() != token_count {
         return Err(VaultError::WeightsMismatch.into());
     }

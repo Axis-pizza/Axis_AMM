@@ -52,14 +52,14 @@ use pinocchio::{
     sysvars::{clock::Clock, rent::Rent, Sysvar},
     ProgramResult,
 };
-use pinocchio_system::instructions::CreateAccount;
+use pinocchio_system::instructions::{Allocate, Assign, CreateAccount, Transfer};
 
 use crate::constants::{MAX_TURNOVER_BPS, REBALANCE_WINDOW_SLOTS, TOKEN_PROGRAM_ID};
 use crate::error::VaultError;
 use crate::jupiter::{
     invoke_jupiter_leg, read_token_account_balance, JUPITER_PROGRAM_ID, MAX_JUPITER_CPI_ACCOUNTS,
 };
-use crate::state::{load, load_mut, EtfState, RebalanceState};
+use crate::state::{load, load_mut, EtfState, RebalanceState, MAX_BASKET_TOKENS};
 
 const FIXED_ACCOUNTS: usize = 4;
 
@@ -88,24 +88,57 @@ pub(crate) fn ensure_rebalance_state(
         return Ok(());
     }
 
-    // First use — create + initialize. Same posture as CreateEtf: a
-    // pre-funded address makes CreateAccount fail loud rather than
-    // being adopted silently.
+    // First use — create + initialize. The sidecar address is a
+    // deterministic function of the (public) etf_state key, so anyone
+    // can compute it and `System::Transfer` a lamport to it ahead of
+    // time. A plain `CreateAccount` aborts with AccountAlreadyInUse on
+    // a pre-funded address, which would let a griefer permanently brick
+    // Rebalance + weight governance for a targeted ETF. Adopt the
+    // pre-funded case instead: top up to rent-exemption, allocate, and
+    // assign to this program — all under the PDA signature, which the
+    // griefer cannot forge, so they can only ever *donate* rent.
     let rent = Rent::get()?;
+    let needed = rent.minimum_balance(RebalanceState::LEN);
+    let space = RebalanceState::LEN as u64;
     let bump_bytes = [bump];
     let seeds = [
         Seed::from(b"rebal".as_ref()),
         Seed::from(etf_state_key.as_ref()),
         Seed::from(bump_bytes.as_ref()),
     ];
-    CreateAccount {
-        from: payer,
-        to: rebalance_state_ai,
-        lamports: rent.minimum_balance(RebalanceState::LEN),
-        space: RebalanceState::LEN as u64,
-        owner: program_id,
+
+    let existing = rebalance_state_ai.lamports();
+    if existing == 0 {
+        CreateAccount {
+            from: payer,
+            to: rebalance_state_ai,
+            lamports: needed,
+            space,
+            owner: program_id,
+        }
+        .invoke_signed(&[Signer::from(&seeds)])?;
+    } else {
+        if existing < needed {
+            Transfer {
+                from: payer,
+                to: rebalance_state_ai,
+                lamports: needed - existing,
+            }
+            .invoke()?;
+        }
+        // Allocate must run while the account is still system-owned;
+        // Assign hands ownership to this program afterwards.
+        Allocate {
+            account: rebalance_state_ai,
+            space,
+        }
+        .invoke_signed(&[Signer::from(&seeds)])?;
+        Assign {
+            account: rebalance_state_ai,
+            owner: program_id,
+        }
+        .invoke_signed(&[Signer::from(&seeds)])?;
     }
-    .invoke_signed(&[Signer::from(&seeds)])?;
 
     let mut data = rebalance_state_ai.try_borrow_mut_data()?;
     let st = unsafe { load_mut::<RebalanceState>(&mut data) }
@@ -208,6 +241,14 @@ pub fn process_rebalance(
     }
 
     let tc = token_count;
+    // Defensive: `token_count` is a raw byte in EtfState and `load`
+    // only checks size + discriminator, not its range. CreateEtf
+    // enforces 2..=5 so this never trips today, but the local fixed-size
+    // `[_; 5]` arrays below index by `tc`, so bound it explicitly rather
+    // than trust the stored value (matches WithdrawSol's leg_count cap).
+    if tc < 2 || tc > MAX_BASKET_TOKENS {
+        return Err(VaultError::InvalidBasketSize.into());
+    }
     let sell = sell_index as usize;
     let buy = buy_index as usize;
     if sell >= tc || buy >= tc {
@@ -276,6 +317,16 @@ pub fn process_rebalance(
                 st.window_snapshot[i] = vault_pre[i];
             }
             st.window_sold = [0u64; 5];
+        }
+
+        // A vault empty at window-open got a zero turnover budget (there
+        // was nothing to protect). If it has since been funded, lift just
+        // that vault's snapshot to its current balance so a freshly-funded
+        // token isn't locked out of rebalancing until the window rolls.
+        // This only ever raises a snapshot that is exactly zero, so it
+        // cannot be used to inflate a non-zero budget.
+        if st.window_snapshot[sell] == 0 && vault_pre[sell] > 0 {
+            st.window_snapshot[sell] = vault_pre[sell];
         }
 
         // Cap is computed against the window-open snapshot so deposits

@@ -56,11 +56,26 @@ pub fn process_apply_weights(
         if !etf.is_initialized() {
             return Err(VaultError::InvalidDiscriminator.into());
         }
+        // Honor the timelock's exit guarantee: Withdraw / WithdrawSol
+        // revert while paused, so a holder cannot leave a paused ETF.
+        // Activating a composition change during that freeze would move
+        // the target out from under holders who have no exit — refuse it
+        // (ProposeWeights stays open so the clock can still run; only the
+        // live mutation is gated). Mirrors Rebalance's paused gate.
+        if etf.paused != 0 {
+            return Err(VaultError::PoolPaused.into());
+        }
         (etf.token_count as usize, etf.authority, etf.bump, etf.name)
     };
 
     if authority.key().as_ref() != &stored_auth {
         return Err(VaultError::OwnerMismatch.into());
+    }
+    // Defensive bound: `staged[i]` below indexes a fixed `[u16; 5]`.
+    // CreateEtf caps token_count at 5; guard anyway since `load` does
+    // not re-validate the stored byte.
+    if token_count < 2 || token_count > MAX_BASKET_TOKENS {
+        return Err(VaultError::InvalidBasketSize.into());
     }
 
     // PDA re-derivation (SetFee idiom).

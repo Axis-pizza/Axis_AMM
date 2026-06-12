@@ -71,9 +71,9 @@ The `ClearBatch` instruction consumes a completely flat ~38,000 CUs regardless o
 |---|---|---|---|
 | **pfda-amm-3** | `contracts/pfda-amm-3/` | **Mainnet v1** | 3-token PFDA batch auction with oracle bounding + Jito bid/treasury (canonical ETF A) |
 | **axis-vault** | `contracts/axis-vault/` | **Mainnet v1** | ETF token lifecycle: create, deposit/mint, withdraw/burn, sweep, set-fee, set-cap, pause |
-| **axis-g3m** | `contracts/axis-g3m/` | _Research only (devnet)_ | 5-token G3M continuous AMM, used as the academic baseline in the A/B comparison; **not part of mainnet v1** |
-| **pfda-amm** (legacy) | `contracts/pfda-amm/` | _Regression-only_ | Original 2-token PFDA prototype kept to detect cross-program regressions; **not deployed to mainnet** |
-| **solana-tfmm-rs** | `solana-tfmm-rs/` | _Off-chain simulator_ | Python/Rust LVR simulation engine that produced the table above |
+| **axis-g3m** | `legacy/axis-g3m/` | _Research only (devnet)_ | 5-token G3M continuous AMM, used as the academic baseline in the A/B comparison; **not part of mainnet v1** |
+| **pfda-amm** (legacy) | `legacy/pfda-amm/` | _Regression-only_ | Original 2-token PFDA prototype kept to detect cross-program regressions; **not deployed to mainnet** |
+| **solana-tfmm-rs** | `legacy/solana-tfmm-rs/` | _Off-chain simulator_ | Python/Rust LVR simulation engine that produced the table above |
 
 ### Mainnet v1 Scope
 

@@ -11,7 +11,7 @@ pub const MPL_TOKEN_METADATA_ID: &str = "metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt51
 
 pub const AXIS_G3M_SO: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../axis-g3m/target/deploy/axis_g3m.so"
+    "/../../legacy/axis-g3m/target/deploy/axis_g3m.so"
 );
 pub const PFDA_AMM_3_SO: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -19,7 +19,7 @@ pub const PFDA_AMM_3_SO: &str = concat!(
 );
 pub const PFDA_AMM_SO: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../pfda-amm/target/deploy/pfda_amm.so"
+    "/../../legacy/pfda-amm/target/deploy/pfda_amm.so"
 );
 pub const AXIS_VAULT_SO: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -27,7 +27,7 @@ pub const AXIS_VAULT_SO: &str = concat!(
 );
 pub const JUPITER_V6_SO: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../axis-g3m/fixtures/jupiter_v6.so"
+    "/../../legacy/axis-g3m/fixtures/jupiter_v6.so"
 );
 
 /// Drain-only Jupiter substitute used by axis-vault WithdrawSol bound

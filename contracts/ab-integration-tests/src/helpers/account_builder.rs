@@ -1,7 +1,7 @@
 use solana_address::Address;
 
 /// Build G3mPoolState raw bytes (455 bytes, repr(C)).
-/// Layout: see contracts/axis-g3m/src/state/pool_state.rs
+/// Layout: see legacy/axis-g3m/src/state/pool_state.rs
 #[allow(clippy::too_many_arguments)]
 pub fn build_g3m_pool_state(
     authority: &Address,
@@ -125,7 +125,7 @@ pub fn build_pfda3_pool_state(
 }
 
 /// Build PoolState raw bytes for pfda-amm (the 2-token legacy program).
-/// Layout (272 bytes, repr(C)) per contracts/pfda-amm/src/state/pool_state.rs:
+/// Layout (272 bytes, repr(C)) per legacy/pfda-amm/src/state/pool_state.rs:
 ///   0:    discriminator "poolstat" (8)
 ///   8:    token_a_mint (32)
 ///  40:    token_b_mint (32)

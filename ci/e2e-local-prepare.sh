@@ -49,9 +49,9 @@ fi
 solana-test-validator \
   --reset \
   --ledger /tmp/solana-ci-ledger \
-  --bpf-program 5BKDTDQdX7vFdDooVXZeKicu7S3yX2JY5e3rmASib5pY contracts/pfda-amm/target/deploy/pfda_amm.so \
+  --bpf-program 5BKDTDQdX7vFdDooVXZeKicu7S3yX2JY5e3rmASib5pY legacy/pfda-amm/target/deploy/pfda_amm.so \
   --bpf-program DbAPmgkrpCCZrpBMv5x1ye6nJUreqY313SuQjZsMyjEf contracts/pfda-amm-3/target/deploy/pfda_amm_3.so \
-  --bpf-program 65aE9QdVz5bapV19BGt5cyTgVitYpekGwusRoQEovNUi contracts/axis-g3m/target/deploy/axis_g3m.so \
+  --bpf-program 65aE9QdVz5bapV19BGt5cyTgVitYpekGwusRoQEovNUi legacy/axis-g3m/target/deploy/axis_g3m.so \
   --bpf-program DeeUnCHcnPG8arbjGTLhTKeDhpPUBper3TDrpFPHnCwy contracts/axis-vault/target/deploy/axis_vault.so \
   --bpf-program metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s "${mpl_so_path}" \
   > /tmp/solana-test-validator.log 2>&1 &

@@ -28,7 +28,7 @@ use solana_native_token::LAMPORTS_PER_SOL;
 use solana_signer::Signer;
 use solana_transaction::Transaction;
 
-// G3mError codes (mirror of contracts/axis-g3m/src/error.rs)
+// G3mError codes (mirror of legacy/axis-g3m/src/error.rs)
 const ERR_INVALID_TOKEN_COUNT: u32 = 7001;
 const ERR_WEIGHTS_MISMATCH: u32 = 7002;
 const ERR_ZERO_AMOUNT: u32 = 7003;

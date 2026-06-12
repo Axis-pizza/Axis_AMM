@@ -25,11 +25,11 @@ jobs:
             ~/.cargo/registry/index
             ~/.cargo/registry/cache
             ~/.cargo/git/db
-            contracts/pfda-amm/target
+            legacy/pfda-amm/target
             contracts/pfda-amm-3/target
-            contracts/axis-g3m/target
+            legacy/axis-g3m/target
             contracts/axis-vault/target
-            solana-tfmm-rs/target
+            legacy/solana-tfmm-rs/target
           key: rust-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             rust-${{ runner.os }}-

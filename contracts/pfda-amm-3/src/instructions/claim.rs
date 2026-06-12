@@ -75,7 +75,7 @@ pub fn process_claim_3(program_id: &Pubkey, accounts: &[AccountInfo]) -> Program
     // PDA. Re-derive the PDA from the declared seeds and compare it
     // to history_ai.key() so only the canonical on-chain history for
     // (pool, batch_id) can be consumed.
-    let (batch_id, clearing_prices, total_in, total_out, fee_bps) = {
+    let (batch_id, clearing_prices, total_in, _total_out, fee_bps) = {
         let data = history_ai.try_borrow_data()?;
         let hist = unsafe { load::<ClearedBatchHistory3>(&data) }
             .ok_or(ProgramError::InvalidAccountData)?;

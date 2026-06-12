@@ -143,6 +143,14 @@ pub fn process_deposit(
             .ok_or(VaultError::DivisionByZero)? as u64;
     }
 
+    // L1 (first-deposit rounding): on the very first deposit the depositor is
+    // credited `amount` share-units but the vaults receive only
+    // `sum(token_amounts[i]) = sum(amount * weights[i] / 10_000)`, which can be
+    // up to `tc - 1` base units less than `amount` from per-leg floor division.
+    // The gap is ≤ 4 units, first-deposit only, and dilutes the first depositor
+    // against themselves, so it is accepted (the MINIMUM_LIQUIDITY lock below
+    // bounds proportional math regardless). Subsequent deposits mint the
+    // min-of-candidates and are fully backed.
     let mint_amount = if total_supply == 0 {
         amount
     } else {
@@ -229,7 +237,11 @@ pub fn process_deposit(
         }
     }
 
-    // Compute fee
+    // Compute fee. Floor division: any deposit with
+    // `mint_amount * fee_bps < 10_000` (e.g. mint_amount < 334 at 30 bps) pays
+    // zero protocol fee. This dust-fee evasion is bounded by Solana tx cost
+    // (~5000 lamports/tx makes micro-deposits uneconomical) and the resulting
+    // share position is correspondingly tiny; documented rather than guarded.
     let fee_amount = mint_amount
         .checked_mul(fee_bps as u64)
         .ok_or(VaultError::Overflow)?
@@ -245,6 +257,15 @@ pub fn process_deposit(
         .ok_or(VaultError::Overflow)?
         .checked_sub(liquidity_lock)
         .ok_or(VaultError::Overflow)?;
+
+    // L2: a zero `net_mint` means fee + liquidity_lock consumed the entire
+    // mint_amount (only reachable if the fee/lock constants are mis-tuned, or
+    // for a pathologically tiny first deposit). Fail with a clear error
+    // rather than issuing a 0-amount MintTo or leaning on the generic
+    // Overflow above.
+    if net_mint == 0 {
+        return Err(VaultError::InsufficientFirstDeposit.into());
+    }
 
     // Transfer basket tokens from depositor to vaults
     for i in 0..tc {

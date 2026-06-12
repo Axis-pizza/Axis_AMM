@@ -39,6 +39,7 @@ const PFDA_ERR_TREASURY_MISMATCH: u32 = 6023;
 const PFDA_ERR_BID_WITHOUT_TREASURY: u32 = 6024;
 const PFDA3_ERR_VAULT_MISMATCH: u32 = 8025;
 const PFDA3_ERR_UNAUTHORIZED: u32 = 8035;
+const PFDA3_ERR_TREASURY_MISMATCH: u32 = 8019;
 const G3M_ERR_UNAUTHORIZED: u32 = 7020;
 
 // Built-in Solana ProgramError::IllegalOwner — surfaces as either
@@ -912,6 +913,46 @@ fn pfda3_withdraw_fees_rejects_unowned_pool_state() {
     .err()
     .expect("forged pool_state must be rejected by owner check");
     assert_illegal_owner(&err, "withdraw_fees unowned pool");
+}
+
+/// H1: WithdrawFees must pin the fee destination to a token account owned
+/// by the pool treasury. With the registered vaults (so the vault-key check
+/// passes) but a destination ATA owned by an attacker, the new destination
+/// guard fires with TreasuryMismatch — pre-fix the destination was
+/// unvalidated, so the authority could route the withdrawal anywhere.
+#[test]
+fn pfda3_withdraw_fees_rejects_non_treasury_destination() {
+    require_fixture!(PFDA_AMM_3_SO);
+    let Pfda3Fixture { mut svm, payer, pool, mints, vaults, user_tokens: _ } =
+        match seed_pfda3_pool() { Some(f) => f, None => return };
+
+    // Correct, registered vaults → the vault-key check passes and we reach
+    // the H1 destination check. The fee destinations are token accounts
+    // owned by an attacker, NOT the pool treasury.
+    let attacker = Keypair::new();
+    let dests = [
+        Address::new_unique(),
+        Address::new_unique(),
+        Address::new_unique(),
+    ];
+    for i in 0..3 {
+        create_token_account(&mut svm, dests[i], &mints[i], &attacker.pubkey(), 0);
+    }
+
+    let err = send(
+        &mut svm,
+        pfda3_withdraw_fees_ix(
+            payer.pubkey(), // == pool.authority, so the authority gate passes
+            pool,
+            &vaults,
+            &dests,
+            [100_000, 0, 0], // within reserves; only slot 0 withdrawn
+        ),
+        &payer,
+    )
+    .err()
+    .expect("withdraw_fees must reject a non-treasury fee destination");
+    assert_custom_err(&err, PFDA3_ERR_TREASURY_MISMATCH, "withdraw_fees non-treasury dest");
 }
 
 #[test]

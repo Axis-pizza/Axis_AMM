@@ -63,7 +63,7 @@ pub fn process_withdraw_fees(
     // also pre-check that every requested withdrawal fits inside the
     // tracked reserves so we don't start transferring before we know
     // the whole batch can succeed.
-    let (mints, vaults, bump) = {
+    let (mints, vaults, bump, treasury) = {
         let data = pool_ai.try_borrow_data()?;
         let pool = unsafe { crate::state::load::<PoolState3>(&data) }
             .ok_or(ProgramError::InvalidAccountData)?;
@@ -78,7 +78,7 @@ pub fn process_withdraw_fees(
                 return Err(Pfda3Error::FeeWithdrawExceedsReserves.into());
             }
         }
-        (pool.token_mints, pool.vaults, pool.bump)
+        (pool.token_mints, pool.vaults, pool.bump, pool.treasury)
     };
 
     let bump_bytes = [bump];
@@ -102,6 +102,26 @@ pub fn process_withdraw_fees(
             // registered vaults).
             if vault.key().as_ref() != &vaults[i] {
                 return Err(Pfda3Error::VaultMismatch.into());
+            }
+
+            // H1: confine the fee destination to a token account owned by the
+            // pool treasury. Previously `treasury_token` was unvalidated, so
+            // the authority could route the withdrawal to any arbitrary
+            // account. (The amount is still bounded only by `reserves[i]`, not
+            // a separately-tracked accrued-fee figure — a tight
+            // fees-vs-principal bound needs an `accrued_fees` state field +
+            // discriminator bump, deferred to keep existing pools compatible.
+            // Pinning the destination at least keeps every withdrawal inside
+            // the protocol treasury multisig rather than an attacker wallet.)
+            crate::security::verify_token_account_owner(treasury_token)?;
+            {
+                let tdata = treasury_token.try_borrow_data()?;
+                if tdata.len() < 64 {
+                    return Err(ProgramError::InvalidAccountData);
+                }
+                if &tdata[32..64] != &treasury {
+                    return Err(Pfda3Error::TreasuryMismatch.into());
+                }
             }
 
             Transfer {

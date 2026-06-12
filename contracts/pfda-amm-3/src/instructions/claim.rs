@@ -196,37 +196,27 @@ pub fn process_claim_3(program_id: &Pubkey, accounts: &[AccountInfo]) -> Program
         .invoke_signed(&[Signer::from(&pool_signer)])?;
     }
 
-    // Update pool reserves to reflect the outflow + invariant floor check
+    // Update pool reserves to reflect the outflow.
+    //
+    // SECURITY (H4 — fund-lock fix): the previous build enforced a per-claim
+    // "post_product >= 99% * pre_product" reserve-floor here. Because Claim is
+    // all-or-nothing (it only sets `is_claimed` on success and has no partial
+    // path), ANY single legitimate claim large enough to drop the reserve
+    // product by >1% reverted permanently, locking that user's funds. The
+    // floor was also redundant: ClearBatch already runs a reserve-adequacy
+    // check (`new_reserves[j] >= max_outflow_j` for a full exit in each token)
+    // at clearing time, so the sum of all claims against a cleared batch can
+    // never underflow a reserve. We drop the per-claim product floor and rely
+    // on that clearing-time guarantee plus the `checked_sub` below, which
+    // still turns any over-drain into a hard error rather than an underflow.
     if amount_out > 0 {
         let mut data = pool_ai.try_borrow_mut_data()?;
         let pool = unsafe { load_mut::<PoolState3>(&mut data) }
             .ok_or(ProgramError::InvalidAccountData)?;
 
-        // Snapshot reserve product before outflow (checked — overflow is an error)
-        let pre_product: u128 = (pool.reserves[0].max(1) as u128)
-            .checked_mul(pool.reserves[1].max(1) as u128)
-            .and_then(|x| x.checked_mul(pool.reserves[2].max(1) as u128))
-            .ok_or(ProgramError::from(Pfda3Error::Overflow))?;
-
         pool.reserves[out_i] = pool.reserves[out_i]
             .checked_sub(amount_out)
             .ok_or(Pfda3Error::Overflow)?;
-
-        // Post-claim invariant floor: reserve product must not drop more
-        // than 1% below pre-claim product. This catches pathological
-        // concentrated withdrawals that could drain a single token.
-        let post_product: u128 = (pool.reserves[0].max(1) as u128)
-            .checked_mul(pool.reserves[1].max(1) as u128)
-            .and_then(|x| x.checked_mul(pool.reserves[2].max(1) as u128))
-            .ok_or(ProgramError::from(Pfda3Error::Overflow))?;
-
-        let min_product = pre_product
-            .checked_mul(99)
-            .ok_or(ProgramError::from(Pfda3Error::Overflow))?
-            / 100;
-        if post_product < min_product {
-            return Err(Pfda3Error::InvariantViolation.into());
-        }
     }
 
     // Mark claimed

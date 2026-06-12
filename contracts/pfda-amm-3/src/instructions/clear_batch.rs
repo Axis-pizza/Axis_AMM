@@ -49,7 +49,7 @@ pub fn process_clear_batch_3(
     let current_slot = Clock::get()?.slot;
 
     // Load pool state
-    let (batch_id, window_end, reserves, weights, window_slots, base_fee_bps, pool_key, treasury) = {
+    let (batch_id, window_end, reserves, weights, window_slots, base_fee_bps, pool_key, treasury, authority) = {
         let data = pool_ai.try_borrow_data()?;
         let pool = unsafe { load::<PoolState3>(&data) }
             .ok_or(ProgramError::InvalidAccountData)?;
@@ -74,8 +74,21 @@ pub fn process_clear_batch_3(
             pool.base_fee_bps,
             *pool_ai.key(),
             pool.treasury,
+            pool.authority,
         )
     };
+
+    // SECURITY (H3 — oracle bypass): clear_batch_inner prices off a PURE
+    // reserve ratio with NO ±5% oracle clamp whenever feed accounts are
+    // omitted (accounts.len() <= 8). ClearBatch is permissionless, so an
+    // untrusted searcher could deliberately drop the feeds and clear at a
+    // self-favourable price (then claim against it). Restrict the no-feed path
+    // to the pool authority (a trusted keeper). Permissionless cranking still
+    // works — but only WITH fresh oracle feeds (accounts 6,7,8), which are
+    // clamped to ±5% of the oracle-derived relative price.
+    if accounts.len() <= 8 && cranker.key().as_ref() != &authority {
+        return Err(Pfda3Error::Unauthorized.into());
+    }
 
     // --- Jito bid payment (before reentrancy guard — safe to fail freely) ---
     if bid_lamports > 0 {

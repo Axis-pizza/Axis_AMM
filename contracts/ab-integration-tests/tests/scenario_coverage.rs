@@ -28,6 +28,7 @@ use solana_transaction::Transaction;
 // Pfda3Error codes (mirror of contracts/pfda-amm-3/src/error.rs)
 const ERR_POOL_PAUSED: u32 = 8018;
 const ERR_VAULT_MISMATCH: u32 = 8025;
+const ERR_UNAUTHORIZED: u32 = 8035;
 
 // ─── Instruction builders ───────────────────────────────────────────────
 
@@ -430,6 +431,82 @@ fn clear_batch_rejects_when_paused() {
     .err()
     .expect("ClearBatch on paused pool should reject");
     assert_custom_err(&err, ERR_POOL_PAUSED, "ClearBatch paused-pool rejection");
+}
+
+/// H2: AddLiquidity is authority-only seeding. A non-authority signer must
+/// be rejected (Unauthorized) before any reserve write — the instruction
+/// has no LP accounting, so a non-authority caller would lose their tokens,
+/// and direct reserve writes are also a clearing-price-manipulation
+/// primitive. Locks in the gate so a regression can't silently re-open it.
+#[test]
+fn add_liquidity_rejects_non_authority() {
+    require_fixture!(PFDA_AMM_3_SO);
+    let Fixture { mut svm, payer: _, pool, mints: _, vaults, user_tokens } =
+        match seed_pool(/*paused=*/ false) {
+            Some(f) => f,
+            None => return,
+        };
+
+    // Pool authority is `payer`; a different signer must be rejected.
+    let attacker = Keypair::new();
+    svm.airdrop(&attacker.pubkey(), 100 * LAMPORTS_PER_SOL).unwrap();
+
+    let err = send(
+        &mut svm,
+        pfda3_add_liquidity_ix(
+            pfda3_id(),
+            attacker.pubkey(),
+            pool,
+            &vaults,
+            &user_tokens,
+            &[0, 0, 0],
+        ),
+        &attacker,
+    )
+    .err()
+    .expect("non-authority AddLiquidity must reject");
+    assert_custom_err(&err, ERR_UNAUTHORIZED, "add_liquidity non-authority");
+}
+
+/// H3: the no-oracle ClearBatch path (no feed accounts supplied) prices off
+/// the raw reserve ratio with no ±5% oracle clamp, so it is restricted to
+/// the pool authority. A non-authority cranker omitting the feeds must be
+/// rejected — permissionless cranking still works *with* fresh feeds.
+#[test]
+fn clear_batch_no_feed_rejects_non_authority() {
+    require_fixture!(PFDA_AMM_3_SO);
+    let Fixture { mut svm, payer: _, pool, mints: _, vaults: _, user_tokens: _ } =
+        match seed_pool(/*paused=*/ false) {
+            Some(f) => f,
+            None => return,
+        };
+
+    // Window seeded to end at slot 100; warp past it so the window-ended
+    // gate passes and we reach the H3 no-feed authority gate.
+    warp_to_slot(&mut svm, 200);
+    let queue = seed_batch_queue(&mut svm, pool, 0, 100);
+    let history = Address::find_program_address(
+        &[b"history3", pool.as_ref(), &0u64.to_le_bytes()],
+        &pfda3_id(),
+    )
+    .0;
+    let new_queue = Address::find_program_address(
+        &[b"queue3", pool.as_ref(), &1u64.to_le_bytes()],
+        &pfda3_id(),
+    )
+    .0;
+
+    let attacker = Keypair::new();
+    svm.airdrop(&attacker.pubkey(), 100 * LAMPORTS_PER_SOL).unwrap();
+
+    let err = send(
+        &mut svm,
+        pfda3_clear_batch_ix(pfda3_id(), attacker.pubkey(), pool, queue, history, new_queue, 0),
+        &attacker,
+    )
+    .err()
+    .expect("no-feed ClearBatch by a non-authority cranker must reject");
+    assert_custom_err(&err, ERR_UNAUTHORIZED, "clear_batch no-feed non-authority");
 }
 
 // ─── pfda-amm-3 InitializePool rejection paths ─────────────────────────

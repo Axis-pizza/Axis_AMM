@@ -895,12 +895,16 @@ fn apply_weights_rejects_when_paused() {
     assert_eq!(&read_etf_weights(&f.svm, &f.etf_state)[..3], &[4_500u16, 2_750, 2_750]);
 }
 
-/// A vault empty when the window opened gets a zero turnover budget. Once
-/// it is funded, the next rebalance selling it must re-baseline the
-/// snapshot to the current balance instead of staying locked at cap=0
-/// until the window rolls.
+/// A vault empty when the window opened gets a zero turnover budget
+/// (cap = 0). SECURITY (M2): after it is funded mid-window, selling it must
+/// stay LOCKED at cap = 0. The old build "re-baselined" the zero snapshot to
+/// the live balance here, handing a freshly-funded vault an immediate full
+/// 20% turnover budget — bypassing the window-open snapshot protection and
+/// amplifying the min_out=1 drain. The lock holds only until the window
+/// naturally rolls, at which point the vault is re-snapshotted at its funded
+/// balance like any other and becomes sellable again.
 #[test]
-fn rebalance_rebaselines_zero_snapshot_after_funding() {
+fn rebalance_empty_at_open_vault_locked_until_window_rolls() {
     require_fixture!(AXIS_VAULT_SO);
     require_fixture!(MOCK_JUPITER_SO);
     let mut f = match seed(0) {
@@ -928,19 +932,36 @@ fn rebalance_rebaselines_zero_snapshot_after_funding() {
     let sink2 = Address::new_unique();
     create_token_account(&mut f.svm, sink2, &f.basket_mints[2], &f.manager.pubkey(), 0);
 
-    // Selling token2 (snapshot was 0) must now succeed: cap re-baselines
-    // to 100_000 → 20_000 budget, and 10_000 fits.
+    // M2: selling token2 (snapshot was 0, NOT lifted) is now rejected — the
+    // budget stays at cap = 0 for the rest of the window.
+    f.svm.expire_blockhash();
+    let ix = rebalance_ix(
+        &f, f.manager.pubkey(), 2, 1, 10_000, 4_000, 10_000, 5_000,
+        sink2, f.filler_src, f.filler.pubkey(), true, f.vaults[1],
+    );
+    let err = send(&mut f.svm, ix, &[&manager, &filler])
+        .err()
+        .expect("empty-at-open vault must stay locked at cap=0 mid-window");
+    assert_custom_err(&err, ERR_TURNOVER_EXCEEDED, "zero-snapshot vault locked mid-window");
+
+    let (window_start, snapshot, sold, _, _) = read_rebal(&f.svm, &f.rebalance_state);
+    assert_eq!(snapshot[2], 0, "zero snapshot must NOT be lifted to the live balance");
+    assert_eq!(sold[2], 0, "the rejected sale consumes no budget");
+
+    // Once the window rolls, token2 is re-snapshotted at its funded balance
+    // (100_000 → 20_000 budget) and the same sale succeeds.
+    warp_to_slot(&mut f.svm, window_start + REBALANCE_WINDOW_SLOTS + 1);
     f.svm.expire_blockhash();
     let ix = rebalance_ix(
         &f, f.manager.pubkey(), 2, 1, 10_000, 4_000, 10_000, 5_000,
         sink2, f.filler_src, f.filler.pubkey(), true, f.vaults[1],
     );
     send(&mut f.svm, ix, &[&manager, &filler])
-        .expect("funded zero-snapshot vault must be sellable, not locked at cap=0");
+        .expect("after the window rolls, the funded vault is sellable again");
 
     let (_, snapshot, sold, _, _) = read_rebal(&f.svm, &f.rebalance_state);
-    assert_eq!(snapshot[2], 100_000, "snapshot re-baselined from 0 to current balance");
-    assert_eq!(sold[2], 10_000, "consumption charged against the re-baselined budget");
+    assert_eq!(snapshot[2], 100_000, "the new window re-snapshots token2 at its funded balance");
+    assert_eq!(sold[2], 10_000, "consumption charged against the re-snapshotted budget");
 }
 
 // Field-use suppressor for fixture members kept for future tests.

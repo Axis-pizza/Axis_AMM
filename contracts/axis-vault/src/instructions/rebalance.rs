@@ -319,15 +319,15 @@ pub fn process_rebalance(
             st.window_sold = [0u64; 5];
         }
 
-        // A vault empty at window-open got a zero turnover budget (there
-        // was nothing to protect). If it has since been funded, lift just
-        // that vault's snapshot to its current balance so a freshly-funded
-        // token isn't locked out of rebalancing until the window rolls.
-        // This only ever raises a snapshot that is exactly zero, so it
-        // cannot be used to inflate a non-zero budget.
-        if st.window_snapshot[sell] == 0 && vault_pre[sell] > 0 {
-            st.window_snapshot[sell] = vault_pre[sell];
-        }
+        // SECURITY (M2): a zero window-open snapshot is NO LONGER lifted to
+        // the live balance here. The old "zero-lift" gave a vault that was
+        // empty when the window opened — and then funded mid-window by normal
+        // Deposits — an immediate full turnover budget, bypassing the
+        // window-open snapshot protection and amplifying the min_out=1 drain
+        // (M1). A vault empty at window-open now keeps a zero budget (cap = 0,
+        // so any amount_in trips TurnoverExceeded) until the window naturally
+        // rolls (REBALANCE_WINDOW_SLOTS), at which point it is re-snapshotted
+        // at its funded balance like every other vault.
 
         // Cap is computed against the window-open snapshot so deposits
         // landing mid-window can't be used to inflate the sell budget.

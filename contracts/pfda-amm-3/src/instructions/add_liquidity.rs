@@ -9,10 +9,15 @@ use pinocchio_token::instructions::Transfer;
 use crate::error::Pfda3Error;
 use crate::state::{load, load_mut, PoolState3};
 
-/// AddLiquidity3 — deposit tokens into pool vaults and update reserves.
+/// AddLiquidity3 — AUTHORITY-ONLY seed / top-up of pool vaults + reserves.
+///
+/// There is no LP-share accounting, so liquidity added here cannot be
+/// redeemed by the caller; it is operator-supplied pool liquidity. Gated to
+/// `pool.authority` (H2) — a non-authority caller would lose their tokens and
+/// could also use direct reserve writes to skew clearing prices.
 ///
 /// Accounts:
-/// 0: [signer, writable] user
+/// 0: [signer, writable] authority (must equal pool.authority)
 /// 1: [writable]          pool_state PDA
 /// 2: [writable]          vault_0
 /// 3: [writable]          vault_1
@@ -24,7 +29,7 @@ use crate::state::{load, load_mut, PoolState3};
 ///
 /// Data: [amount_0: u64 LE][amount_1: u64 LE][amount_2: u64 LE]
 pub fn process_add_liquidity_3(
-    _program_id: &Pubkey,
+    program_id: &Pubkey,
     accounts: &[AccountInfo],
     amounts: [u64; 3],
 ) -> ProgramResult {
@@ -37,9 +42,22 @@ pub fn process_add_liquidity_3(
         return Err(ProgramError::MissingRequiredSignature);
     }
 
-    // #33: the original version skipped paused / reentrancy / vault
-    // cross-checks. Gate on all three so AddLiquidity shares the same
-    // safety posture as SwapRequest.
+    // H2 (no LP accounting): AddLiquidity mints no LP shares and creates no
+    // claim ticket — liquidity added here is recoverable only through the
+    // pool's own fee/clearing rails, and writing `reserves` directly outside a
+    // batch is also a clearing-price-manipulation primitive. A non-authority
+    // caller would simply lose their tokens. Restrict the whole instruction to
+    // the pool authority: this is a seed / top-up-liquidity operation for the
+    // pool operator, NOT a user-facing deposit.
+    //
+    // #59: pool_ai feeds both the authority check and the vaults[i] match, so
+    // it must be program-owned (no fake-pool substitution).
+    if pool_ai.owner() != program_id {
+        return Err(ProgramError::IllegalOwner);
+    }
+
+    // #33: gate on paused / reentrancy / vault cross-checks so AddLiquidity
+    // shares the same safety posture as SwapRequest.
     let pool_vaults = {
         let data = pool_ai.try_borrow_data()?;
         let pool = unsafe { load::<PoolState3>(&data) }
@@ -52,6 +70,10 @@ pub fn process_add_liquidity_3(
         }
         if pool.reentrancy_guard != 0 {
             return Err(Pfda3Error::ReentrancyDetected.into());
+        }
+        // H2: authority-only seeding.
+        if user.key().as_ref() != &pool.authority {
+            return Err(Pfda3Error::Unauthorized.into());
         }
         pool.vaults
     };

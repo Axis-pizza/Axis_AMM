@@ -34,6 +34,16 @@ fn backtest_writes_report() {
     md.push('\n');
     md.push_str(&render_mev(&mev_results));
 
+    // ── Stage-2: recorded-route execution quality ──────────────────────────
+    // Skips cleanly when the fixtures dir is empty (CI).  Prints a skip line
+    // to stderr so the grep "[backtest] stage-2 skipped" assertion passes.
+    let stage2_results = stage2_exec_quality(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/fixtures/backtest/jup_routes"
+    ));
+    md.push('\n');
+    md.push_str(&render_stage2(&stage2_results));
+
     let out = concat!(env!("CARGO_MANIFEST_DIR"), "/target/backtest-report.md");
     std::fs::write(out, &md).unwrap();
     eprintln!("backtest report -> {out}");

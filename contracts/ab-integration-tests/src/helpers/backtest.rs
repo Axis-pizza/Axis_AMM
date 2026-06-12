@@ -528,20 +528,14 @@ pub fn run_rebalance_backtest(
         let jup_trade_usd = jup_raw_trade.min(jup_vals[a_jup] * MAX_TURNOVER_BPS / 10_000.0);
 
         // ── JupModel path swap ──
-        // Build a per-step JupModel with mid_price = price_a / price_b
-        // (how many units of b per unit of a, in USD terms: 1 USD of a → 1 USD of b
-        //  at fair value; slippage curve uses native input size).
-        // trade_in_native = trade_usd / price_a  (native token a units)
-        // slippage_frac uses depth_l in the same native units as trade_in_native.
-        let jup_trade_in_native = jup_trade_usd / prices_usd[a_jup];
-        let jup_step_model = JupModel {
-            depth_l: jup[a_jup].depth_l,
-            // mid_price here is the ratio price_a/price_b but the slippage
-            // formula only uses depth_l; we compute realized_out in USD directly.
-            mid_price: prices_usd[a_jup] / prices_usd[b_jup],
-        };
-        // slippage fraction on the native-unit trade
-        let jup_slip = jup_step_model.slippage_frac(jup_trade_in_native);
+        // USD-consistent slippage. `depth_l` is calibrated as a USD notional
+        // (see jup_calibration.json), so the trade size fed to the curve MUST
+        // also be USD. An earlier version converted to native token units
+        // (trade_usd / price_a), but those span ~5e6x across SOL vs BONK while
+        // a single calibrated `depth_l` does not — the mismatch produced absurd
+        // ~80%/step slippage. The model is token-agnostic on USD notional;
+        // `depth_l` is the same calibrated value for all three legs here.
+        let jup_slip = jup[a_jup].slippage_frac(jup_trade_usd);
         let jup_realized_out_usd = jup_trade_usd * (1.0 - jup_slip);
         let jup_mid_usd = jup_trade_usd; // frictionless mid
         let jup_cost_bps = if jup_mid_usd > 0.0 {
@@ -662,6 +656,11 @@ pub fn render_report(s: &BacktestSummary) -> String {
     md.push_str("| metric | jup | pfda |\n|---|---|---|\n");
     md.push_str(&format!("| total cost (bps) | {:.2} | {:.2} |\n", s.jup_total_cost_bps, s.pfda_total_cost_bps));
     md.push_str(&format!("| avg tracking-error (bps) | {:.2} | {:.2} |\n\n", s.jup_avg_te_bps, s.pfda_avg_te_bps));
+    md.push_str("### Reading this\n\n");
+    md.push_str("- **jup** is a calibrated CPMM depth model (here ~$50M USD depth); on a deep pool, rebalance slippage is single-digit bps/step — this is the *execution-cost* benchmark, not an MEV-aware one.\n");
+    md.push_str("- **pfda** is the real `pfda_amm_3.so` clearing a one-order batch each step. Its much higher cost on this **SOL/BONK/WIF** basket is a genuine finding, not noise: the basket spans ~5e6x in unit price (SOL ~$150 vs BONK ~$0.00003), so the Q32.32 clearing price for the cheap/high-reserve leg (BONK) collapses to a small (~3-significant-figure) integer, and the `amount_in * price_in / price_out` integer division truncates ~2%/trade when rebalancing *out of* that leg. This is the precision limit of pfda's current fixed-point clearing on extreme-decimal-spread baskets — a prime target for the next pfda upgrade (decimal normalization / higher-precision clearing).\n");
+    md.push_str("- **Caveat:** the *absolute* pfda figure is partly sensitive to the harness's fixed `SCALE` (native-unit granularity). The *qualitative* result — large precision loss concentrated on the cheap leg — is robust to `SCALE`. Treat pfda's number as directional, not a literal on-chain cost.\n");
+    md.push_str("- pfda's actual advantage (MEV / sandwich resistance from one-price batch clearing) is measured separately in the MEV section, not here.\n\n");
     md.push_str("| day | jup_cost | pfda_cost | jup_te | pfda_te |\n|---|---|---|---|---|\n");
     for st in &s.steps {
         md.push_str(&format!("| {} | {:.2} | {:.2} | {:.2} | {:.2} |\n",

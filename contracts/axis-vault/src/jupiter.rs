@@ -65,7 +65,17 @@ pub fn read_token_account_balance(account: &AccountInfo) -> Result<u64, ProgramE
 /// references in `route_accounts` become both the AccountMeta list and
 /// the AccountInfo list passed to the CPI; metas are derived from each
 /// AccountInfo's signer/writable flags. Optionally accepts a PDA
-/// signer for vault-side WithdrawSol legs.
+/// signer for vault-side legs (WithdrawSol, Rebalance).
+///
+/// `elevated_pda` marks the account with that key as a signer in the
+/// CPI metas. Callee privileges are decided by the metas alone — the
+/// runtime uses `pda_signer`'s seeds only to authorize the claim, it
+/// never elevates a meta by itself. The PDA can't be a transaction-
+/// level signer (nobody holds its key), so its AccountInfo flag is
+/// always false and `AccountMeta::from` would propagate non-signer
+/// status into the route: every downstream transfer authorized by the
+/// PDA (Jupiter's `user_transfer_authority`) would fail signature
+/// validation. Pass the etf_state key alongside `pda_signer`.
 ///
 /// Returns the bound used internally so callers can size their CU
 /// budget against `MAX_JUPITER_CPI_ACCOUNTS`.
@@ -75,6 +85,7 @@ pub fn invoke_jupiter_leg(
     route_accounts: &[&AccountInfo],
     route_bytes: &[u8],
     pda_signer: Option<&Signer>,
+    elevated_pda: Option<&Pubkey>,
 ) -> Result<(), ProgramError> {
     if jupiter_program.key().as_ref() != &JUPITER_PROGRAM_ID {
         return Err(VaultError::InvalidJupiterProgram.into());
@@ -84,12 +95,19 @@ pub fn invoke_jupiter_leg(
     }
 
     // Build AccountMeta list. We use writable + signer flags from the
-    // AccountInfo itself; clients must build the tx with the right
-    // flags, the same way Jupiter expects when called directly.
+    // AccountInfo itself (clients must build the tx with the right
+    // flags, the same way Jupiter expects when called directly), then
+    // elevate the signing PDA's entries — see `elevated_pda` above.
     let mut metas_storage: [core::mem::MaybeUninit<AccountMeta>; MAX_JUPITER_CPI_ACCOUNTS] =
         unsafe { core::mem::MaybeUninit::uninit().assume_init() };
     for (i, ai) in route_accounts.iter().enumerate() {
-        metas_storage[i].write(AccountMeta::from(*ai));
+        let mut meta = AccountMeta::from(*ai);
+        if let Some(pda_key) = elevated_pda {
+            if ai.key() == pda_key {
+                meta = AccountMeta::new(ai.key(), ai.is_writable(), true);
+            }
+        }
+        metas_storage[i].write(meta);
     }
     let metas: &[AccountMeta] = unsafe {
         core::slice::from_raw_parts(

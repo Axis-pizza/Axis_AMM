@@ -56,6 +56,35 @@ pub const DEFAULT_FEE_BPS: u16 = 30;
 /// let SetFee operate freely below it.
 pub const DEFAULT_MAX_FEE_BPS: u16 = MAX_FEE_BPS_CEILING;
 
+/// Per-window, per-vault turnover ceiling for Rebalance, in basis
+/// points of the vault balance snapshotted when the window opened.
+/// 2_000 bps = 20 %. Rebalance route bytes and `min_out` are both
+/// authority-supplied, so on-chain we cannot verify execution price
+/// without an oracle — what we CAN bound is the rate of value
+/// extraction: a malicious authority routing through its own pool
+/// captures at most the execution-price gap on 20 % of a vault per
+/// window, leaving holders time to observe and exit via WithdrawSol.
+pub const MAX_TURNOVER_BPS: u64 = 2_000;
+
+/// Length of one rebalance turnover window in slots. ~1 hour at
+/// 400 ms/slot. When a window expires the next Rebalance re-snapshots
+/// vault balances and resets the sold counters — multi-leg rebalances
+/// inside one window share the budget instead of being serialized by a
+/// per-call cooldown.
+pub const REBALANCE_WINDOW_SLOTS: u64 = 9_000;
+
+/// Slots between ProposeWeights and the earliest valid ApplyWeights.
+/// ~24 hours at 400 ms/slot. Holders who disagree with a pending
+/// composition change have the full timelock to redeem at current NAV.
+pub const WEIGHT_TIMELOCK_SLOTS: u64 = 216_000;
+
+/// Per-proposal ceiling on how far any single weight may move from the
+/// currently active `weights_bps`. 2_000 bps = 20 percentage points.
+/// Combined with the timelock this rate-limits composition drift — an
+/// authority cannot flip a basket to 100 % of a token it controls in
+/// one motion (P-6 anti-rug).
+pub const MAX_WEIGHT_DELTA_BPS: u16 = 2_000;
+
 /// Protocol treasury multisig address — the single destination for
 /// protocol fee revenue.
 ///

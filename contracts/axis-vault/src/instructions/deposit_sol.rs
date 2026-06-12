@@ -290,7 +290,7 @@ pub fn process_deposit_sol(
         let route_bytes_end = route_bytes_start + leg_route_byte_lens[i];
         let route_bytes = &leg_data[route_bytes_start..route_bytes_end];
 
-        invoke_jupiter_leg(jupiter_program, refs, route_bytes, None)?;
+        invoke_jupiter_leg(jupiter_program, refs, route_bytes, None, None)?;
 
         route_cursor += cnt;
     }

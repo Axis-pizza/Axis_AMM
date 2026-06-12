@@ -97,6 +97,66 @@ export async function fetchEtfState(
   return decodeEtfState(info.data);
 }
 
+/// Decoded view of `axis_vault::RebalanceState` (sidecar PDA,
+/// discriminator `rebal__1`). Layout mirrors
+/// `contracts/axis-vault/src/state/rebalance.rs`:
+///   disc[8] etf_state[32] bump[1] _pad[7]
+///   window_start_slot u64 @48
+///   window_snapshot [u64;5] @56
+///   window_sold     [u64;5] @96
+///   proposed_weights[u16;5] @136
+///   _pad2[6] @146
+///   proposal_eta_slot u64 @152
+export interface RebalanceStateData {
+  etfState: PublicKey;
+  bump: number;
+  windowStartSlot: bigint;
+  windowSnapshot: bigint[];
+  windowSold: bigint[];
+  proposedWeights: number[];
+  proposalEtaSlot: bigint;
+}
+
+const REBALANCE_DISCRIMINATOR = "rebal__1";
+
+export function decodeRebalanceState(raw: Uint8Array): RebalanceStateData {
+  const disc = new TextDecoder().decode(raw.slice(0, 8));
+  if (disc !== REBALANCE_DISCRIMINATOR) {
+    throw new Error(
+      `RebalanceState discriminator mismatch: got "${disc}" want "${REBALANCE_DISCRIMINATOR}"`,
+    );
+  }
+  const windowSnapshot: bigint[] = [];
+  const windowSold: bigint[] = [];
+  const proposedWeights: number[] = [];
+  for (let i = 0; i < 5; i++) {
+    windowSnapshot.push(readU64(raw, 56 + i * 8));
+    windowSold.push(readU64(raw, 96 + i * 8));
+    proposedWeights.push(readU16(raw, 136 + i * 2));
+  }
+  return {
+    etfState: readPubkey(raw, 8),
+    bump: raw[40],
+    windowStartSlot: readU64(raw, 48),
+    windowSnapshot,
+    windowSold,
+    proposedWeights,
+    proposalEtaSlot: readU64(raw, 152),
+  };
+}
+
+/// Fetch the rebalance sidecar. Returns `null` when the account does
+/// not exist yet (no Rebalance / ProposeWeights has ever run for this
+/// ETF) — that's the normal pre-first-use state, not an error.
+export async function fetchRebalanceState(
+  conn: Connection,
+  rebalanceState: PublicKey,
+): Promise<RebalanceStateData | null> {
+  const info = await conn.getAccountInfo(rebalanceState, "confirmed");
+  if (!info) return null;
+  return decodeRebalanceState(info.data);
+}
+
 /// Read the SPL token-account amount field at offset 64..72.
 export function decodeTokenAccountAmount(raw: Uint8Array): bigint {
   if (raw.length < 72) {

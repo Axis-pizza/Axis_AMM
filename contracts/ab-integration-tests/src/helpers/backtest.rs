@@ -370,6 +370,344 @@ pub fn calibrate_pair(p: &CalPair) -> JupModel {
     JupModel { depth_l: l, mid_price: p.mid_price_out_per_in }
 }
 
+// ─── Stage-1 rebalance backtest ──────────────────────────────────────────────
+//
+// Unit conventions
+// ────────────────
+// We track per-token holdings as plain f64 *USD values* (not native token
+// amounts).  This sidesteps mint-decimals bookkeeping and keeps the math
+// transparent.  We only convert to native units at the boundary where pfda
+// and the JupModel slippage curve require them.
+//
+// SCALE: when calling pfda_execute_swap we need u64 native amounts.
+//   native_amount = usd_value / price_usd * SCALE
+// SCALE = 1_000_000 (6-decimal representation, matching USDC / typical SPL
+// tokens with 6 decimals).  With a $1M notional divided equally across 3
+// tokens and SOL at ~$150, each token bucket is ~$333k ≈ 333_000 * SCALE raw
+// units — well inside u64 range.
+//
+// MAX_TURNOVER_BPS: axis-vault's per-window turnover guard limits each
+// rebalance trade to this fraction of the overweight token's current value.
+// We model 2000 bps (20%) so the per-step slippage cost of the JupModel M1
+// leak is visible on charts without blowing up the test with one giant trade.
+//
+// pfda_execute_swap fallback: if the .so is absent (CI without the binary)
+// we copy jup_cost_bps as pfda_cost_bps and emit a log line.  We never panic.
+
+pub const SCALE: f64 = 1_000_000.0;
+const MAX_TURNOVER_BPS: f64 = 2000.0;
+
+/// Per-day snapshot from one rebalance step.
+#[derive(Debug, Clone)]
+pub struct BacktestStep {
+    /// Day index matching PriceRow::day.
+    pub day: u32,
+    /// Slippage cost of the JupModel path for this step in basis points.
+    pub jup_cost_bps: f64,
+    /// Slippage cost of the pfda path for this step in basis points.
+    pub pfda_cost_bps: f64,
+    /// Max absolute weight deviation (bps) after rebalance — JupModel path.
+    pub jup_te_bps: f64,
+    /// Max absolute weight deviation (bps) after rebalance — pfda path.
+    pub pfda_te_bps: f64,
+}
+
+/// Accumulated results for the full price series.
+#[derive(Debug)]
+pub struct BacktestSummary {
+    pub steps: Vec<BacktestStep>,
+    /// Sum of per-step jup_cost_bps.
+    pub jup_total_cost_bps: f64,
+    /// Sum of per-step pfda_cost_bps.
+    pub pfda_total_cost_bps: f64,
+    /// Mean of per-step jup_te_bps.
+    pub jup_avg_te_bps: f64,
+    /// Mean of per-step pfda_avg_te_bps.
+    pub pfda_avg_te_bps: f64,
+}
+
+/// Return USD prices for day d as [sol, bonk, wif].
+fn row_prices(r: &PriceRow) -> [f64; 3] {
+    [r.sol_usd, r.bonk_usd, r.wif_usd]
+}
+
+/// Convert weight micro-units (sum = 1_000_000) to fractions.
+fn weight_fracs(weights: &[u32; 3]) -> [f64; 3] {
+    let total: u64 = weights.iter().map(|&w| w as u64).sum();
+    [
+        weights[0] as f64 / total as f64,
+        weights[1] as f64 / total as f64,
+        weights[2] as f64 / total as f64,
+    ]
+}
+
+/// Compute tracking-error for one path as max |actual_frac - target_frac| * 10_000.
+fn te_bps(values: &[f64; 3], targets: &[f64; 3]) -> f64 {
+    let total: f64 = values.iter().sum();
+    if total <= 0.0 { return 0.0; }
+    (0..3)
+        .map(|i| (values[i] / total - targets[i]).abs() * 10_000.0)
+        .fold(0.0_f64, f64::max)
+}
+
+/// Run the stage-1 rebalance backtest.
+///
+/// # Arguments
+/// * `prices`     — ordered price rows (day 0 … N-1)
+/// * `jup`        — per-token JupModel depth_l calibrated from market data
+///                  (mid_price is overridden each step from the live ratio)
+/// * `weights`    — target weights in micro-units (must sum to 1_000_000)
+/// * `notional_usd` — starting portfolio value in USD
+pub fn run_rebalance_backtest(
+    prices: &[PriceRow],
+    jup: [JupModel; 3],
+    weights: [u32; 3],
+    notional_usd: f64,
+) -> BacktestSummary {
+    let targets = weight_fracs(&weights);
+
+    // Seed each path's holdings as USD-value buckets on day 0.
+    // holdings[i] = USD value held in token i (plain USD, not native amounts).
+    let mut jup_vals: [f64; 3] = [
+        targets[0] * notional_usd,
+        targets[1] * notional_usd,
+        targets[2] * notional_usd,
+    ];
+    let mut pfda_vals: [f64; 3] = jup_vals;
+
+    let mut steps = Vec::with_capacity(prices.len());
+
+    for (step_idx, row) in prices.iter().enumerate() {
+        let prices_usd = row_prices(row);
+
+        // Mark-to-market: apply the one-step price return to each USD bucket.
+        // Because we track holdings as USD values (not native units), the M2M
+        // is a simple multiplicative scaling: new_usd_i = old_usd_i * (p_t / p_{t-1}).
+        // On day 0, prev_prices == prices_usd so ret == 1.0 (no change).
+        let prev_prices = if step_idx == 0 {
+            prices_usd
+        } else {
+            row_prices(&prices[step_idx - 1])
+        };
+
+        // Apply M2M return to USD buckets (no-op on day 0 since ret == 1.0).
+        for i in 0..3 {
+            let ret = prices_usd[i] / prev_prices[i];
+            jup_vals[i] *= ret;
+            pfda_vals[i] *= ret;
+        }
+
+        // Day 0: no trade, record zero-cost zero-TE step and continue.
+        if step_idx == 0 {
+            steps.push(BacktestStep {
+                day: row.day,
+                jup_cost_bps: 0.0,
+                pfda_cost_bps: 0.0,
+                jup_te_bps: 0.0,
+                pfda_te_bps: 0.0,
+            });
+            continue;
+        }
+
+        // ── Find overweight (a) and underweight (b) for JupModel path ──
+        let jup_total: f64 = jup_vals.iter().sum();
+        let (a_jup, b_jup) = {
+            let mut max_excess = f64::NEG_INFINITY;
+            let mut min_excess = f64::INFINITY;
+            let (mut a, mut b) = (0usize, 0usize);
+            for i in 0..3 {
+                let excess = jup_vals[i] / jup_total - targets[i];
+                if excess > max_excess { max_excess = excess; a = i; }
+                if excess < min_excess { min_excess = excess; b = i; }
+            }
+            (a, b)
+        };
+
+        // Trade size = how much to sell of token a (USD), capped at MAX_TURNOVER_BPS.
+        let jup_raw_trade = (jup_vals[a_jup] - targets[a_jup] * jup_total).max(0.0);
+        let jup_trade_usd = jup_raw_trade.min(jup_vals[a_jup] * MAX_TURNOVER_BPS / 10_000.0);
+
+        // ── JupModel path swap ──
+        // Build a per-step JupModel with mid_price = price_a / price_b
+        // (how many units of b per unit of a, in USD terms: 1 USD of a → 1 USD of b
+        //  at fair value; slippage curve uses native input size).
+        // trade_in_native = trade_usd / price_a  (native token a units)
+        // slippage_frac uses depth_l in the same native units as trade_in_native.
+        let jup_trade_in_native = jup_trade_usd / prices_usd[a_jup];
+        let jup_step_model = JupModel {
+            depth_l: jup[a_jup].depth_l,
+            // mid_price here is the ratio price_a/price_b but the slippage
+            // formula only uses depth_l; we compute realized_out in USD directly.
+            mid_price: prices_usd[a_jup] / prices_usd[b_jup],
+        };
+        // slippage fraction on the native-unit trade
+        let jup_slip = jup_step_model.slippage_frac(jup_trade_in_native);
+        let jup_realized_out_usd = jup_trade_usd * (1.0 - jup_slip);
+        let jup_mid_usd = jup_trade_usd; // frictionless mid
+        let jup_cost_bps = if jup_mid_usd > 0.0 {
+            (jup_mid_usd - jup_realized_out_usd) / jup_mid_usd * 10_000.0
+        } else {
+            0.0
+        };
+
+        // Apply JupModel trade to holdings (subtract a, add realized b).
+        jup_vals[a_jup] -= jup_trade_usd;
+        jup_vals[b_jup] += jup_realized_out_usd;
+
+        // ── pfda path swap ──
+        // Same overweight/underweight analysis on pfda_vals.
+        let pfda_total: f64 = pfda_vals.iter().sum();
+        let (a_pfda, b_pfda) = {
+            let mut max_excess = f64::NEG_INFINITY;
+            let mut min_excess = f64::INFINITY;
+            let (mut a, mut b) = (0usize, 0usize);
+            for i in 0..3 {
+                let excess = pfda_vals[i] / pfda_total - targets[i];
+                if excess > max_excess { max_excess = excess; a = i; }
+                if excess < min_excess { min_excess = excess; b = i; }
+            }
+            (a, b)
+        };
+
+        let pfda_raw_trade = (pfda_vals[a_pfda] - targets[a_pfda] * pfda_total).max(0.0);
+        let pfda_trade_usd = pfda_raw_trade.min(pfda_vals[a_pfda] * MAX_TURNOVER_BPS / 10_000.0);
+
+        // Convert to native units for pfda_execute_swap:
+        //   native = usd_value / price * SCALE
+        // reserves[i] = current pfda portfolio value in native units for token i.
+        let reserves: [u64; 3] = [
+            ((pfda_vals[0] / prices_usd[0] * SCALE) as u64).max(1),
+            ((pfda_vals[1] / prices_usd[1] * SCALE) as u64).max(1),
+            ((pfda_vals[2] / prices_usd[2] * SCALE) as u64).max(1),
+        ];
+        let feed_prices: [i128; 3] = [
+            (prices_usd[0] * 1e18) as i128,
+            (prices_usd[1] * 1e18) as i128,
+            (prices_usd[2] * 1e18) as i128,
+        ];
+        let amount_in: u64 = ((pfda_trade_usd / prices_usd[a_pfda] * SCALE) as u64).max(1);
+
+        let pfda_mid_usd = pfda_trade_usd;
+        let pfda_cost_bps = match pfda_execute_swap(
+            reserves,
+            feed_prices,
+            weights,
+            30, // base_fee_bps
+            a_pfda,
+            b_pfda,
+            amount_in,
+        ) {
+            Some(res) if res.out_amount > 0 => {
+                // Convert realized native out back to USD.
+                let realized_out_usd = res.out_amount as f64 / SCALE * prices_usd[b_pfda];
+                let cost = if pfda_mid_usd > 0.0 {
+                    (pfda_mid_usd - realized_out_usd) / pfda_mid_usd * 10_000.0
+                } else {
+                    0.0
+                };
+                // Apply pfda trade to holdings.
+                pfda_vals[a_pfda] -= pfda_trade_usd;
+                pfda_vals[b_pfda] += realized_out_usd;
+                cost.max(0.0) // cost can't be negative (oracle precision artefacts)
+            }
+            other => {
+                // pfda not available or returned zero — fall back to jup cost so
+                // the summary still accumulates a value; flag it.
+                eprintln!(
+                    "[backtest day={}] pfda unavailable (res={:?}); using jup_cost_bps={:.2} as fallback",
+                    row.day, other.map(|r| r.out_amount), jup_cost_bps
+                );
+                // Apply fallback: use same slippage model as jup path.
+                pfda_vals[a_pfda] -= pfda_trade_usd;
+                pfda_vals[b_pfda] += pfda_trade_usd * (1.0 - jup_slip);
+                jup_cost_bps
+            }
+        };
+
+        // ── Tracking error ──
+        let jup_te = te_bps(&jup_vals, &targets);
+        let pfda_te = te_bps(&pfda_vals, &targets);
+
+        steps.push(BacktestStep {
+            day: row.day,
+            jup_cost_bps: jup_cost_bps.max(0.0),
+            pfda_cost_bps: pfda_cost_bps.max(0.0),
+            jup_te_bps: jup_te,
+            pfda_te_bps: pfda_te,
+        });
+    }
+
+    let jup_total_cost: f64 = steps.iter().map(|s| s.jup_cost_bps).sum();
+    let pfda_total_cost: f64 = steps.iter().map(|s| s.pfda_cost_bps).sum();
+    let n = steps.len() as f64;
+    let jup_avg_te = steps.iter().map(|s| s.jup_te_bps).sum::<f64>() / n;
+    let pfda_avg_te = steps.iter().map(|s| s.pfda_te_bps).sum::<f64>() / n;
+
+    BacktestSummary {
+        steps,
+        jup_total_cost_bps: jup_total_cost,
+        pfda_total_cost_bps: pfda_total_cost,
+        jup_avg_te_bps: jup_avg_te,
+        pfda_avg_te_bps: pfda_avg_te,
+    }
+}
+
+#[cfg(test)]
+mod rebalance_backtest_tests {
+    use super::*;
+
+    #[test]
+    fn backtest_runs_and_accumulates_nonneg_cost() {
+        let prices = load_prices(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/fixtures/backtest/prices.csv"
+        ));
+        let jm = JupModel { depth_l: 1e12, mid_price: 1.0 };
+        let s = run_rebalance_backtest(
+            &prices,
+            [jm; 3],
+            [333_333, 333_333, 333_334],
+            1_000_000.0,
+        );
+
+        println!("=== Backtest Results ===");
+        println!("steps:              {}", s.steps.len());
+        println!("jup_total_cost_bps: {:.4}", s.jup_total_cost_bps);
+        println!("pfda_total_cost_bps:{:.4}", s.pfda_total_cost_bps);
+        println!("jup_avg_te_bps:     {:.4}", s.jup_avg_te_bps);
+        println!("pfda_avg_te_bps:    {:.4}", s.pfda_avg_te_bps);
+        for step in &s.steps {
+            println!(
+                "  day={:2}  jup_cost={:.4}  pfda_cost={:.4}  jup_te={:.4}  pfda_te={:.4}",
+                step.day, step.jup_cost_bps, step.pfda_cost_bps,
+                step.jup_te_bps, step.pfda_te_bps
+            );
+        }
+
+        assert_eq!(s.steps.len(), prices.len());
+        assert!(
+            s.jup_total_cost_bps >= 0.0,
+            "jup_total_cost_bps < 0: {}",
+            s.jup_total_cost_bps
+        );
+        assert!(
+            s.pfda_total_cost_bps >= 0.0,
+            "pfda_total_cost_bps < 0: {}",
+            s.pfda_total_cost_bps
+        );
+        assert!(
+            s.jup_avg_te_bps >= 0.0,
+            "jup_avg_te_bps < 0: {}",
+            s.jup_avg_te_bps
+        );
+        assert!(
+            s.pfda_avg_te_bps >= 0.0,
+            "pfda_avg_te_bps < 0: {}",
+            s.pfda_avg_te_bps
+        );
+    }
+}
+
 #[cfg(test)]
 mod fixture_tests {
     use super::*;

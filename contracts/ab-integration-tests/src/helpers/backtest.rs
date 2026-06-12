@@ -652,6 +652,35 @@ pub fn run_rebalance_backtest(
     }
 }
 
+// ─── Markdown report renderer ────────────────────────────────────────────────
+
+pub fn render_report(s: &BacktestSummary) -> String {
+    let mut md = String::new();
+    md.push_str("# jup-vs-pfda Backtest Report\n\n");
+    md.push_str("> Jupiter side: calibrated CPMM depth model (offline-captured quotes). pfda side: real pfda_amm_3.so cleared in LiteSVM.\n\n");
+    md.push_str("## Stage 1 — rebalance tracking & cost\n\n");
+    md.push_str("| metric | jup | pfda |\n|---|---|---|\n");
+    md.push_str(&format!("| total cost (bps) | {:.2} | {:.2} |\n", s.jup_total_cost_bps, s.pfda_total_cost_bps));
+    md.push_str(&format!("| avg tracking-error (bps) | {:.2} | {:.2} |\n\n", s.jup_avg_te_bps, s.pfda_avg_te_bps));
+    md.push_str("| day | jup_cost | pfda_cost | jup_te | pfda_te |\n|---|---|---|---|---|\n");
+    for st in &s.steps {
+        md.push_str(&format!("| {} | {:.2} | {:.2} | {:.2} | {:.2} |\n",
+            st.day, st.jup_cost_bps, st.pfda_cost_bps, st.jup_te_bps, st.pfda_te_bps));
+    }
+    md
+}
+
+#[cfg(test)]
+mod report_tests {
+    use super::*;
+    #[test]
+    fn report_has_both_columns() {
+        let s = BacktestSummary { steps: vec![], jup_total_cost_bps: 1.0, pfda_total_cost_bps: 2.0, jup_avg_te_bps: 3.0, pfda_avg_te_bps: 4.0 };
+        let md = render_report(&s);
+        assert!(md.contains("jup") && md.contains("pfda") && md.contains("tracking-error"));
+    }
+}
+
 #[cfg(test)]
 mod rebalance_backtest_tests {
     use super::*;

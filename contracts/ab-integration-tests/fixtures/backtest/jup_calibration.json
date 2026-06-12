@@ -1,0 +1,9 @@
+{
+  "captured_at_slot": 0,
+  "pairs": [
+    {"in": "SOL", "out": "BONK", "mid_price_out_per_in": 5000000.0,
+     "samples": [{"in_amount": 1000000000, "out_amount": 4985000000000},
+                 {"in_amount": 10000000000, "out_amount": 49250000000000},
+                 {"in_amount": 100000000000, "out_amount": 470000000000000}]}
+  ]
+}

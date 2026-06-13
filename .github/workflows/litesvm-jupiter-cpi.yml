@@ -70,11 +70,14 @@ jobs:
       # use throwaway treasuries (mirrors `ci/e2e-local-prepare.sh`).
       # The verifiable mainnet build never enables this feature.
       - name: Build SBF programs
+        # axis-g3m and pfda-amm were moved to legacy/ (commit c955231); the
+        # build goes through ci/build-sbf.sh so the same paths work whether or
+        # not the local cargo-build-sbf toolchain mis-parse is present.
         run: |
-          cd contracts/axis-g3m && cargo build-sbf
-          cd ../pfda-amm-3 && cargo build-sbf
-          cd ../pfda-amm && cargo build-sbf
-          cd ../axis-vault && cargo build-sbf --features e2e-disable-treasury-gate
+          bash ci/build-sbf.sh legacy/axis-g3m axis_g3m
+          bash ci/build-sbf.sh contracts/pfda-amm-3 pfda_amm_3
+          bash ci/build-sbf.sh legacy/pfda-amm pfda_amm
+          bash ci/build-sbf.sh contracts/axis-vault axis_vault --features e2e-disable-treasury-gate
 
       - name: Verify committed Jupiter V6 fixture
         # Same rationale as in main-report.yml: the binary is committed
@@ -91,7 +94,7 @@ jobs:
       # ── LiteSVM unit tests ──
       - name: Run axis-g3m LiteSVM tests
         run: |
-          cd contracts/axis-g3m
+          cd legacy/axis-g3m
           cargo test --test jupiter_cpi -- --nocapture --skip mainnet_fork
 
       - name: Run A/B comparison tests (LiteSVM)

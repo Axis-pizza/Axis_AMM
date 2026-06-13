@@ -55,9 +55,10 @@ jobs:
         run: bun run typecheck 2>&1 || true
 
       - name: Build SBF programs
+        # axis-g3m moved to legacy/ (commit c955231); build via ci/build-sbf.sh.
         run: |
-          cd contracts/axis-g3m && cargo build-sbf
-          cd ../pfda-amm-3 && cargo build-sbf
+          bash ci/build-sbf.sh legacy/axis-g3m axis_g3m
+          bash ci/build-sbf.sh contracts/pfda-amm-3 pfda_amm_3
 
       - name: Verify committed Jupiter V6 fixture
         # Jupiter V6 binary is committed at legacy/axis-g3m/fixtures/jupiter_v6.so

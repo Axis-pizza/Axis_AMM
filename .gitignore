@@ -77,3 +77,6 @@ __pycache__/
 Thumbs.db
 .claude/worktrees/
 reports/ab/pr-validation/history/
+
+# AI workflow artifacts (specs/plans written by tooling) — keep out of the repo
+docs/superpowers/

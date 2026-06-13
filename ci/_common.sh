@@ -3,24 +3,24 @@
 set -euo pipefail
 
 RUST_MANIFESTS=(
-  "contracts/pfda-amm/Cargo.toml"
+  "legacy/pfda-amm/Cargo.toml"
   "contracts/pfda-amm-3/Cargo.toml"
-  "contracts/axis-g3m/Cargo.toml"
+  "legacy/axis-g3m/Cargo.toml"
   "contracts/axis-vault/Cargo.toml"
-  "solana-tfmm-rs/Cargo.toml"
+  "legacy/solana-tfmm-rs/Cargo.toml"
 )
 
 SBF_BUILD_MANIFESTS=(
-  "contracts/pfda-amm/Cargo.toml"
+  "legacy/pfda-amm/Cargo.toml"
   "contracts/pfda-amm-3/Cargo.toml"
-  "contracts/axis-g3m/Cargo.toml"
+  "legacy/axis-g3m/Cargo.toml"
   "contracts/axis-vault/Cargo.toml"
 )
 
 SBF_LOCAL_E2E_MANIFESTS=(
-  "contracts/pfda-amm/Cargo.toml"
+  "legacy/pfda-amm/Cargo.toml"
   "contracts/pfda-amm-3/Cargo.toml"
-  "contracts/axis-g3m/Cargo.toml"
+  "legacy/axis-g3m/Cargo.toml"
   "contracts/axis-vault/Cargo.toml"
 )
 

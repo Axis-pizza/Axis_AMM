@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Refresh contracts/axis-g3m/fixtures/jupiter_v6.so by dumping the
+# Refresh legacy/axis-g3m/fixtures/jupiter_v6.so by dumping the
 # current Jupiter V6 mainnet binary. Run this on a developer machine
 # whenever Jupiter announces a program upgrade — committing the result
 # keeps CI deterministic without round-tripping through mainnet RPC.
@@ -21,7 +21,7 @@ set -euo pipefail
 
 RPC_URL="${1:-https://api.mainnet-beta.solana.com}"
 JUPITER_V6_ID="JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4"
-OUT="contracts/axis-g3m/fixtures/jupiter_v6.so"
+OUT="legacy/axis-g3m/fixtures/jupiter_v6.so"
 
 if ! command -v solana >/dev/null; then
   echo "✗ solana CLI not on PATH" >&2

@@ -1,0 +1,10 @@
+{
+  "captured_at_slot": 0,
+  "_note": "Placeholder, internally-consistent USD-notional calibration of a ~$50M-depth CPMM. in_amount/out_amount are USD notionals (whole dollars); mid_price_out_per_in = 1.0 (USD->USD frictionless). calibrate_l recovers depth_l ~= 50_000_000 USD. Replaced by real captures via the offline refresher (Task 9); the schema is frozen, the values are illustrative.",
+  "pairs": [
+    {"in": "USD", "out": "USD", "mid_price_out_per_in": 1.0,
+     "samples": [{"in_amount": 1000000, "out_amount": 980392},
+                 {"in_amount": 5000000, "out_amount": 4545454},
+                 {"in_amount": 10000000, "out_amount": 8333333}]}
+  ]
+}

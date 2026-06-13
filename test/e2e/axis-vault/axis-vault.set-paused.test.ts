@@ -204,8 +204,10 @@ async function main() {
 
   // ---- Withdraw on paused pool → PoolPaused (9012) ----
   const withdrawData = Buffer.concat([
-    Buffer.from([2]), u64Le(100_000_000n), u64Le(0n),
+    Buffer.from([2]), u64Le(100_000_000n),
     Buffer.from([nameBytes.length]), nameBytes,
+    // new layout: [burn u64][name_len u8][name][min_out u64 × token_count]
+    ...Array.from({ length: TOKEN_COUNT }, () => u64Le(0n)),
   ]);
   const withdrawKeys = [
     { pubkey: payer.publicKey, isSigner: true, isWritable: true },

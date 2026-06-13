@@ -55,6 +55,18 @@ path = "tests/issue_59_coverage.rs"
 name = "issue_61_coverage"
 path = "tests/issue_61_coverage.rs"
 
+[[test]]
+name = "backtest"
+path = "tests/backtest.rs"
+
+[[test]]
+name = "refresh_backtest_fixtures"
+path = "tests/refresh_backtest_fixtures.rs"
+
+[[test]]
+name = "axis_vault_rebalance"
+path = "tests/axis_vault_rebalance.rs"
+
 [dependencies]
 litesvm = "0.11"
 solana-keypair = "3.1"

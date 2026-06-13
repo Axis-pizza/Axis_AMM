@@ -14,7 +14,7 @@ use crate::state::{load, load_mut, EtfState};
 /// Withdraw — burn ETF tokens, return proportional basket tokens.
 ///
 /// share = effective_burn / total_supply (after fee deduction)
-/// For each token: output = vault_balance * share
+/// For each token i: output[i] = vault_balance[i] * share
 ///
 /// Fee design mirrors Deposit: the fee portion of the user's ETF tokens
 /// is transferred to the treasury's ETF ATA rather than destroyed, so
@@ -31,12 +31,15 @@ use crate::state::{load, load_mut, EtfState};
 ///   6..6+N: [writable] vault token accounts (source)
 ///   6+N..6+2N: [writable] withdrawer's basket token accounts (destination)
 ///
-/// Data: [burn_amount: u64][min_tokens_out: u64][name: bytes for PDA derivation]
+/// Data: [burn_amount: u64][name_len: u8][name: bytes][min_out: u64 × N]
+/// where N == basket token_count. Each min_out[i] is an independent
+/// per-token slippage floor (in that token's native units), so callers
+/// can express meaningful minimums across tokens with different decimals.
 pub fn process_withdraw(
     program_id: &Pubkey,
     accounts: &[AccountInfo],
     burn_amount: u64,
-    min_tokens_out: u64,
+    min_outs: &[u64],
     name: &[u8],
 ) -> ProgramResult {
     if burn_amount == 0 {
@@ -136,10 +139,12 @@ pub fn process_withdraw(
         .checked_sub(fee_amount)
         .ok_or(VaultError::Overflow)?;
 
-    // Pre-transfer slippage check: compute expected total output from vault
-    // balances up front and reject before any CPI if below min_tokens_out.
-    // Saves CUs on stale quotes and mirrors Deposit's pre-transfer guard.
-    let mut expected_total: u64 = 0;
+    // Pre-transfer slippage check: compute per-token output from vault
+    // balances up front and reject before any CPI if any token falls
+    // below its individual floor. Saves CUs on stale quotes and mirrors
+    // Deposit's pre-transfer guard. Per-token floors avoid the apples-to-
+    // oranges summation problem that arises when tokens have different
+    // decimals (finding M3).
     let mut per_vault_amount = [0u64; 5];
     for i in 0..tc {
         let vault = &accounts[6 + i];
@@ -156,13 +161,15 @@ pub fn process_withdraw(
             .checked_div(total_supply as u128)
             .ok_or(VaultError::DivisionByZero)? as u64;
         per_vault_amount[i] = withdraw_amount;
-        expected_total = expected_total
-            .checked_add(withdraw_amount)
-            .ok_or(VaultError::Overflow)?;
     }
 
-    if expected_total < min_tokens_out {
-        return Err(VaultError::SlippageExceeded.into());
+    if min_outs.len() != tc {
+        return Err(VaultError::WeightsMismatch.into());
+    }
+    for i in 0..tc {
+        if per_vault_amount[i] < min_outs[i] {
+            return Err(VaultError::SlippageExceeded.into());
+        }
     }
 
     // Transfer fee portion to treasury (withdrawer signs). Treasury accrues

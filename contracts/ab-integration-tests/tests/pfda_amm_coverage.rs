@@ -27,7 +27,7 @@ use solana_native_token::LAMPORTS_PER_SOL;
 use solana_signer::Signer;
 use solana_transaction::Transaction;
 
-// PfmmError codes (mirror of contracts/pfda-amm/src/error.rs)
+// PfmmError codes (mirror of legacy/pfda-amm/src/error.rs)
 const ERR_BATCH_WINDOW_NOT_ENDED: u32 = 6002;
 const ERR_POOL_PAUSED: u32 = 6018;
 const ERR_VAULT_MISMATCH: u32 = 6020;

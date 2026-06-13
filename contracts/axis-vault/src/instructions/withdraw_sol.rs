@@ -296,7 +296,17 @@ pub fn process_withdraw_sol(
         let route_bytes_end = route_bytes_start + leg_route_byte_lens[i];
         let route_bytes = &leg_data[route_bytes_start..route_bytes_end];
 
-        invoke_jupiter_leg(jupiter_program, refs, route_bytes, Some(&vault_signer))?;
+        // The etf_state PDA key is elevated to signer in the CPI metas;
+        // without that, the PDA's non-signer top-level flag would
+        // propagate into the route and Jupiter's user_transfer_authority
+        // would fail signature validation on its inner transfers.
+        invoke_jupiter_leg(
+            jupiter_program,
+            refs,
+            route_bytes,
+            Some(&vault_signer),
+            Some(etf_state_ai.key()),
+        )?;
 
         route_cursor += cnt;
     }

@@ -286,9 +286,11 @@ async function main() {
   const withdrawData = Buffer.concat([
     Buffer.from([2]),                     // disc = Withdraw
     u64Le(burnAmount),
-    u64Le(0n),                           // min_tokens_out (0 = no slippage check)
     Buffer.from([nameBytes.length]),
     nameBytes,
+    // per-token min_out (one u64 per basket token); 0 = no slippage floor.
+    // New layout: [burn u64][name_len u8][name][min_out u64 × token_count].
+    ...Array.from({ length: TOKEN_COUNT }, () => u64Le(0n)),
   ]);
 
   const beforeBalances: bigint[] = [];
@@ -433,9 +435,9 @@ async function main() {
     const badWithdrawData = Buffer.concat([
       Buffer.from([2]),
       u64Le(hugeAmount),
-      u64Le(0n),
       Buffer.from([nameBytes.length]),
       nameBytes,
+      ...Array.from({ length: TOKEN_COUNT }, () => u64Le(0n)),
     ]);
 
     await sendAndConfirmTransaction(conn, new Transaction().add(new TransactionInstruction({
@@ -555,9 +557,9 @@ async function main() {
     const badWithdrawData = Buffer.concat([
       Buffer.from([2]),
       u64Le(1_000n),
-      u64Le(0n),
       Buffer.from([nameBytes.length]),
       nameBytes,
+      ...Array.from({ length: TOKEN_COUNT }, () => u64Le(0n)),
     ]);
     await sendAndConfirmTransaction(conn, new Transaction().add(new TransactionInstruction({
       programId: PROGRAM_ID,
@@ -634,9 +636,9 @@ async function main() {
     const badWithdrawData = Buffer.concat([
       Buffer.from([2]),
       u64Le(1_000n),
-      u64Le(0n),
       Buffer.from([nameBytes.length]),
       nameBytes,
+      ...Array.from({ length: TOKEN_COUNT }, () => u64Le(0n)),
     ]);
     await sendAndConfirmTransaction(conn, new Transaction().add(new TransactionInstruction({
       programId: PROGRAM_ID,
@@ -677,9 +679,9 @@ async function main() {
     const badWithdrawData = Buffer.concat([
       Buffer.from([2]),
       u64Le(1_000n),
-      u64Le(0n),
       Buffer.from([nameBytes.length]),
       nameBytes,
+      ...Array.from({ length: TOKEN_COUNT }, () => u64Le(0n)),
     ]);
     await sendAndConfirmTransaction(conn, new Transaction().add(new TransactionInstruction({
       programId: PROGRAM_ID,
@@ -757,9 +759,11 @@ async function main() {
     const slipData = Buffer.concat([
       Buffer.from([2]),
       u64Le(1_000n),                   // tiny burn → tiny total output
-      u64Le(999_999_999_999_999n),     // unreachable min_tokens_out
       Buffer.from([nameBytes.length]),
       nameBytes,
+      // per-token min_out: token 0's floor is unreachably high → SlippageExceeded
+      u64Le(999_999_999_999_999n),
+      ...Array.from({ length: TOKEN_COUNT - 1 }, () => u64Le(0n)),
     ]);
     await sendAndConfirmTransaction(conn, new Transaction().add(new TransactionInstruction({
       programId: PROGRAM_ID,
@@ -846,9 +850,9 @@ async function main() {
     const fullWithdrawData = Buffer.concat([
       Buffer.from([2]),
       u64Le(remaining),
-      u64Le(0n),
       Buffer.from([nameBytes.length]),
       nameBytes,
+      ...Array.from({ length: TOKEN_COUNT }, () => u64Le(0n)),
     ]);
     await sendAndConfirmTransaction(conn, new Transaction().add(new TransactionInstruction({
       programId: PROGRAM_ID,

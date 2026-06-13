@@ -8,6 +8,7 @@ import { TokensPanel } from "./components/TokensPanel";
 import { CreateEtfPanel } from "./components/CreateEtfPanel";
 import { WithdrawPanel } from "./components/WithdrawPanel";
 import { WithdrawSolPanel } from "./components/WithdrawSolPanel";
+import { RebalancePanel } from "./components/RebalancePanel";
 import { PfmmPanel } from "./components/PfmmPanel";
 import { PoolsPanel } from "./components/PoolsPanel";
 import { getClusterConfig, type Cluster, type ClusterConfig } from "./lib/programs";
@@ -30,6 +31,7 @@ type Tab =
   | "etf"
   | "withdraw_etf"
   | "withdraw_sol"
+  | "rebalance"
   | "pools"
   | "pfmm";
 
@@ -131,6 +133,8 @@ function Shell({
 
         {tab === "withdraw_sol" && <WithdrawSolPanel config={config} />}
 
+        {tab === "rebalance" && <RebalancePanel config={config} />}
+
         {tab === "pools" && (
           <PoolsPanel config={config} onPickPool={pickPool} />
         )}
@@ -226,6 +230,7 @@ function Tabs({
     { id: "etf", label: "Create ETF" },
     { id: "withdraw_etf", label: "Withdraw ETF" },
     { id: "withdraw_sol", label: "Withdraw → SOL" },
+    { id: "rebalance", label: "Rebalance" },
     { id: "pools", label: "Pools" },
     { id: "pfmm", label: "PFMM" },
   ];

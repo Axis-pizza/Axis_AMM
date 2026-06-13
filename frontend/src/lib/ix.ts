@@ -254,6 +254,142 @@ export function ixWithdraw(args: WithdrawArgs): TransactionInstruction {
   });
 }
 
+// ───────── axis-vault v1.2: Rebalance + weight governance ─────────
+
+/// Derive the rebalance sidecar PDA: `[b"rebal", etfState]`. Holds the
+/// turnover-window accounting and the pending weight proposal; created
+/// lazily on the first Rebalance / ProposeWeights call.
+export function findRebalanceState(
+  programId: PublicKey,
+  etfState: PublicKey,
+): [PublicKey, number] {
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from("rebal"), etfState.toBuffer()],
+    programId,
+  );
+}
+
+export interface RebalanceArgs {
+  programId: PublicKey;
+  authority: PublicKey;
+  etfState: PublicKey;
+  rebalanceState: PublicKey;
+  /// All N basket vaults in `etf.token_vaults` order.
+  vaults: PublicKey[];
+  jupiterProgram: PublicKey;
+  /// Jupiter route account metas for the swap leg. The program prepends
+  /// the sell vault itself as the CPI's first account, so this list is
+  /// the remainder of the Jupiter swap account list. Pass the signer /
+  /// writable flags exactly as Jupiter expects them.
+  routeAccounts: { pubkey: PublicKey; isSigner: boolean; isWritable: boolean }[];
+  /// Opaque Jupiter V6 swap instruction data.
+  routeBytes: Buffer;
+  sellIndex: number;
+  buyIndex: number;
+  amountIn: bigint;
+  /// Lower bound on tokens credited to the buy vault. Must be > 0 — it's
+  /// the only on-chain proof the swap output reached custody.
+  minOut: bigint;
+}
+
+/// Rebalance (disc=9) — manager-gated single-pair basket swap via a
+/// Jupiter CPI signed by the etf_state PDA. Bounded on-chain by the
+/// per-window turnover cap and post-swap balance checks (sell vault
+/// loses ≤ amount_in, buy vault gains ≥ min_out, every other vault is
+/// non-decreasing). See `contracts/axis-vault/src/instructions/rebalance.rs`.
+export function ixRebalance(args: RebalanceArgs): TransactionInstruction {
+  if (args.sellIndex === args.buyIndex)
+    throw new Error("sellIndex and buyIndex must differ");
+  if (args.sellIndex >= args.vaults.length || args.buyIndex >= args.vaults.length)
+    throw new Error("sell/buy index out of range for vaults");
+  if (args.minOut <= 0n) throw new Error("minOut must be > 0");
+  if (args.routeAccounts.length + 1 > 32)
+    throw new Error("route account count exceeds MAX_JUPITER_CPI_ACCOUNTS (32)");
+
+  const data = Buffer.concat([
+    Buffer.from([9]),
+    Buffer.from([args.sellIndex, args.buyIndex]),
+    u64Le(args.amountIn),
+    u64Le(args.minOut),
+    Buffer.from([args.routeAccounts.length]),
+    u32Le(args.routeBytes.length),
+    args.routeBytes,
+  ]);
+
+  return new TransactionInstruction({
+    programId: args.programId,
+    keys: [
+      { pubkey: args.authority, isSigner: true, isWritable: true },
+      { pubkey: args.etfState, isSigner: false, isWritable: false },
+      { pubkey: args.rebalanceState, isSigner: false, isWritable: true },
+      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+      ...args.vaults.map((v) => ({
+        pubkey: v,
+        isSigner: false,
+        isWritable: true,
+      })),
+      { pubkey: args.jupiterProgram, isSigner: false, isWritable: false },
+      ...args.routeAccounts,
+    ],
+    data,
+  });
+}
+
+export interface ProposeWeightsArgs {
+  programId: PublicKey;
+  authority: PublicKey;
+  etfState: PublicKey;
+  rebalanceState: PublicKey;
+  /// length = token_count, every entry > 0, sums to 10_000. Each entry
+  /// must move ≤ MAX_WEIGHT_DELTA_BPS (2_000) from the current weight.
+  newWeights: number[];
+}
+
+/// ProposeWeights (disc=10) — stage a new target-weight vector behind
+/// the 24h weight timelock. See
+/// `contracts/axis-vault/src/instructions/propose_weights.rs`.
+export function ixProposeWeights(args: ProposeWeightsArgs): TransactionInstruction {
+  const tc = args.newWeights.length;
+  if (tc < 2 || tc > 5) throw new Error("newWeights length must be 2..5");
+  const weightsBuf = Buffer.alloc(tc * 2);
+  for (let i = 0; i < tc; i++) weightsBuf.writeUInt16LE(args.newWeights[i], i * 2);
+
+  const data = Buffer.concat([Buffer.from([10, tc]), weightsBuf]);
+
+  return new TransactionInstruction({
+    programId: args.programId,
+    keys: [
+      { pubkey: args.authority, isSigner: true, isWritable: true },
+      { pubkey: args.etfState, isSigner: false, isWritable: false },
+      { pubkey: args.rebalanceState, isSigner: false, isWritable: true },
+      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+    ],
+    data,
+  });
+}
+
+export interface ApplyWeightsArgs {
+  programId: PublicKey;
+  authority: PublicKey;
+  etfState: PublicKey;
+  rebalanceState: PublicKey;
+}
+
+/// ApplyWeights (disc=11) — activate a matured weight proposal into
+/// `etf_state.weights_bps`. Rejects before `proposal_eta_slot`. See
+/// `contracts/axis-vault/src/instructions/apply_weights.rs`.
+export function ixApplyWeights(args: ApplyWeightsArgs): TransactionInstruction {
+  return new TransactionInstruction({
+    programId: args.programId,
+    keys: [
+      { pubkey: args.authority, isSigner: true, isWritable: false },
+      { pubkey: args.etfState, isSigner: false, isWritable: true },
+      { pubkey: args.rebalanceState, isSigner: false, isWritable: true },
+    ],
+    data: Buffer.from([11]),
+  });
+}
+
 // ───────── pfda-amm-3 PDAs + builders ─────────
 
 export function findPool3(

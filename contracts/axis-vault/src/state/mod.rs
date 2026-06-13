@@ -1,6 +1,8 @@
 pub mod etf;
+pub mod rebalance;
 
 pub use etf::{EtfState, MAX_BASKET_TOKENS, MAX_ETF_NAME_LEN, MAX_ETF_TICKER_LEN};
+pub use rebalance::RebalanceState;
 
 /// Safely transmute a `&mut [u8]` to `&mut T`. Returns `None` on size or
 /// alignment mismatch.

@@ -47,6 +47,15 @@ enum Instruction {
     /// SetCap — authority-gated TVL cap, monotonically non-decreasing
     /// (zero opts out). Pre-mainnet hardening for closed-beta ramp.
     SetCap = 8,
+    /// Rebalance — authority-gated single-pair basket swap via Jupiter
+    /// CPI, bounded by a per-window turnover cap. v1.2.
+    Rebalance = 9,
+    /// ProposeWeights — stage a new target-weight vector behind the
+    /// weight timelock (sidecar PDA). v1.2.
+    ProposeWeights = 10,
+    /// ApplyWeights — activate a matured weight proposal into
+    /// `etf_state.weights_bps`. v1.2.
+    ApplyWeights = 11,
 }
 
 impl Instruction {
@@ -61,6 +70,9 @@ impl Instruction {
             6 => Some(Instruction::WithdrawSol),
             7 => Some(Instruction::SetFee),
             8 => Some(Instruction::SetCap),
+            9 => Some(Instruction::Rebalance),
+            10 => Some(Instruction::ProposeWeights),
+            11 => Some(Instruction::ApplyWeights),
             _ => None,
         }
     }
@@ -162,25 +174,25 @@ pub fn process_instruction(
         }
 
         Instruction::Withdraw => {
-            // Data: [burn_amount: u64 LE][min_tokens_out: u64 LE][name_len: u8][name: bytes]
-            if data.len() < 17 {
-                return Err(ProgramError::InvalidInstructionData);
-            }
+            // Data: [burn_amount u64][name_len u8][name][min_out u64 × token_count]
+            if data.len() < 9 { return Err(ProgramError::InvalidInstructionData); }
             let burn_amount = u64::from_le_bytes([
-                data[0], data[1], data[2], data[3],
-                data[4], data[5], data[6], data[7],
-            ]);
-            let min_tokens_out = u64::from_le_bytes([
-                data[8], data[9], data[10], data[11],
-                data[12], data[13], data[14], data[15],
-            ]);
-            let name_len = data[16] as usize;
-            if data.len() < 17 + name_len {
+                data[0],data[1],data[2],data[3],data[4],data[5],data[6],data[7]]);
+            let name_len = data[8] as usize;
+            let mins_start = 9 + name_len;
+            if data.len() < mins_start || (data.len() - mins_start) % 8 != 0 {
                 return Err(ProgramError::InvalidInstructionData);
             }
-            let name = &data[17..17 + name_len];
-
-            instructions::process_withdraw(program_id, accounts, burn_amount, min_tokens_out, name)
+            let name = &data[9..mins_start];
+            let n = (data.len() - mins_start) / 8;
+            if n == 0 || n > 5 { return Err(ProgramError::InvalidInstructionData); }
+            let mut min_outs = [0u64; 5];
+            for i in 0..n {
+                let o = mins_start + i * 8;
+                min_outs[i] = u64::from_le_bytes([
+                    data[o],data[o+1],data[o+2],data[o+3],data[o+4],data[o+5],data[o+6],data[o+7]]);
+            }
+            instructions::process_withdraw(program_id, accounts, burn_amount, &min_outs[..n], name)
         }
 
         Instruction::SweepTreasury => {
@@ -277,6 +289,60 @@ pub fn process_instruction(
                 data[4], data[5], data[6], data[7],
             ]);
             instructions::process_set_cap(program_id, accounts, new_cap)
+        }
+
+        Instruction::Rebalance => {
+            // Data: [sell_index: u8][buy_index: u8]
+            //       [amount_in: u64 LE][min_out: u64 LE]
+            //       [route_account_count: u8]
+            //       [route_len: u32 LE][route_bytes]
+            if data.len() < 2 + 8 + 8 + 1 + 4 {
+                return Err(ProgramError::InvalidInstructionData);
+            }
+            let sell_index = data[0];
+            let buy_index = data[1];
+            let amount_in = u64::from_le_bytes([
+                data[2], data[3], data[4], data[5],
+                data[6], data[7], data[8], data[9],
+            ]);
+            let min_out = u64::from_le_bytes([
+                data[10], data[11], data[12], data[13],
+                data[14], data[15], data[16], data[17],
+            ]);
+            let route_account_count = data[18];
+            let route_len = u32::from_le_bytes([
+                data[19], data[20], data[21], data[22],
+            ]) as usize;
+            if data.len() < 23 + route_len {
+                return Err(ProgramError::InvalidInstructionData);
+            }
+            let route_bytes = &data[23..23 + route_len];
+            instructions::process_rebalance(
+                program_id, accounts, sell_index, buy_index,
+                amount_in, min_out, route_account_count, route_bytes,
+            )
+        }
+
+        Instruction::ProposeWeights => {
+            // Data: [token_count: u8][weights: u16 LE × token_count]
+            if data.is_empty() {
+                return Err(ProgramError::InvalidInstructionData);
+            }
+            let tc = data[0] as usize;
+            if tc == 0 || tc > 5 || data.len() < 1 + tc * 2 {
+                return Err(ProgramError::InvalidInstructionData);
+            }
+            let mut weights = [0u16; 5];
+            for i in 0..tc {
+                let off = 1 + i * 2;
+                weights[i] = u16::from_le_bytes([data[off], data[off + 1]]);
+            }
+            instructions::process_propose_weights(program_id, accounts, &weights[..tc])
+        }
+
+        Instruction::ApplyWeights => {
+            // No data.
+            instructions::process_apply_weights(program_id, accounts)
         }
     }
 }

@@ -6,16 +6,36 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/_common.sh"
 
 ensure_solana_path
 
+# Mapping from manifest path → (crate-dir, crate-name, extra-args).
+# Uses ci/build-sbf.sh to bypass the cargo-build-sbf / rustup-1.27
+# toolchain mis-parse (invalid toolchain name with embedded TAB+path).
+declare -A SBF_CRATE_DIR=(
+  ["legacy/pfda-amm/Cargo.toml"]="legacy/pfda-amm"
+  ["contracts/pfda-amm-3/Cargo.toml"]="contracts/pfda-amm-3"
+  ["legacy/axis-g3m/Cargo.toml"]="legacy/axis-g3m"
+  ["contracts/axis-vault/Cargo.toml"]="contracts/axis-vault"
+)
+declare -A SBF_CRATE_NAME=(
+  ["legacy/pfda-amm/Cargo.toml"]="pfda_amm"
+  ["contracts/pfda-amm-3/Cargo.toml"]="pfda_amm_3"
+  ["legacy/axis-g3m/Cargo.toml"]="axis_g3m"
+  ["contracts/axis-vault/Cargo.toml"]="axis_vault"
+)
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 for manifest in "${SBF_LOCAL_E2E_MANIFESTS[@]}"; do
+  crate_dir="${SBF_CRATE_DIR[$manifest]}"
+  crate_name="${SBF_CRATE_NAME[$manifest]}"
   # axis-vault: enable the local-only feature that zeroes PROTOCOL_TREASURY
   # so the CreateEtf gate stays inert. The verifiable mainnet build never
   # runs this script, so the real Squads vault key still ships to mainnet.
   if [[ "${manifest}" == "contracts/axis-vault/Cargo.toml" ]]; then
-    echo "==> cargo build-sbf (${manifest}) [features: e2e-disable-treasury-gate]"
-    cargo build-sbf --manifest-path "${manifest}" --features e2e-disable-treasury-gate
+    echo "==> ci/build-sbf.sh (${manifest}) [features: e2e-disable-treasury-gate]"
+    "${SCRIPT_DIR}/build-sbf.sh" "${crate_dir}" "${crate_name}" --features e2e-disable-treasury-gate
   else
-    echo "==> cargo build-sbf (${manifest})"
-    cargo build-sbf --manifest-path "${manifest}"
+    echo "==> ci/build-sbf.sh (${manifest})"
+    "${SCRIPT_DIR}/build-sbf.sh" "${crate_dir}" "${crate_name}"
   fi
 done
 
@@ -49,9 +69,9 @@ fi
 solana-test-validator \
   --reset \
   --ledger /tmp/solana-ci-ledger \
-  --bpf-program 5BKDTDQdX7vFdDooVXZeKicu7S3yX2JY5e3rmASib5pY contracts/pfda-amm/target/deploy/pfda_amm.so \
+  --bpf-program 5BKDTDQdX7vFdDooVXZeKicu7S3yX2JY5e3rmASib5pY legacy/pfda-amm/target/deploy/pfda_amm.so \
   --bpf-program DbAPmgkrpCCZrpBMv5x1ye6nJUreqY313SuQjZsMyjEf contracts/pfda-amm-3/target/deploy/pfda_amm_3.so \
-  --bpf-program 65aE9QdVz5bapV19BGt5cyTgVitYpekGwusRoQEovNUi contracts/axis-g3m/target/deploy/axis_g3m.so \
+  --bpf-program 65aE9QdVz5bapV19BGt5cyTgVitYpekGwusRoQEovNUi legacy/axis-g3m/target/deploy/axis_g3m.so \
   --bpf-program DeeUnCHcnPG8arbjGTLhTKeDhpPUBper3TDrpFPHnCwy contracts/axis-vault/target/deploy/axis_vault.so \
   --bpf-program metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s "${mpl_so_path}" \
   > /tmp/solana-test-validator.log 2>&1 &

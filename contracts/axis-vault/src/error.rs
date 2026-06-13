@@ -107,6 +107,31 @@ pub enum VaultError {
     /// flows, but the program revalidates so a hand-crafted ix
     /// can't slip past.
     InvalidUri = 9039,
+    /// Rebalance rejected: cumulative sell amount for this vault inside
+    /// the current turnover window would exceed
+    /// `window_snapshot * MAX_TURNOVER_BPS / 10_000`. Bounds the rate
+    /// at which a malicious or compromised authority can bleed value
+    /// through self-dealing routes — holders can observe and exit via
+    /// WithdrawSol before the next window opens.
+    TurnoverExceeded = 9040,
+    /// Rebalance: `sell_index` / `buy_index` out of range for the ETF's
+    /// `token_count`, or sell == buy.
+    InvalidVaultIndex = 9041,
+    /// ProposeWeights: at least one weight moves more than
+    /// `MAX_WEIGHT_DELTA_BPS` away from the current `weights_bps`.
+    /// Rate-limits composition drift per proposal (P-6 anti-rug).
+    WeightDeltaExceeded = 9042,
+    /// ApplyWeights called before `proposal_eta_slot`. The timelock
+    /// gives holders a guaranteed exit window between seeing a
+    /// proposal and it taking effect.
+    TimelockNotElapsed = 9043,
+    /// ApplyWeights called with no pending proposal (or the sidecar
+    /// PDA does not exist yet).
+    NoPendingProposal = 9044,
+    /// The rebalance sidecar account exists but fails validation:
+    /// wrong discriminator or back-pointer mismatch against the
+    /// supplied etf_state.
+    InvalidRebalanceState = 9045,
 }
 
 impl From<VaultError> for ProgramError {

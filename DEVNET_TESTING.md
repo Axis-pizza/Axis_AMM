@@ -223,7 +223,7 @@ Compares both ETFs side by side on a local test validator.
 cd SolanaAMM
 solana-test-validator \
   --bpf-program DbAPmgkrpCCZrpBMv5x1ye6nJUreqY313SuQjZsMyjEf contracts/pfda-amm-3/target/deploy/pfda_amm_3.so \
-  --bpf-program 65aE9QdVz5bapV19BGt5cyTgVitYpekGwusRoQEovNUi contracts/axis-g3m/target/deploy/axis_g3m.so \
+  --bpf-program 65aE9QdVz5bapV19BGt5cyTgVitYpekGwusRoQEovNUi legacy/axis-g3m/target/deploy/axis_g3m.so \
   --reset
 
 # Terminal 2: Run benchmark
@@ -241,21 +241,21 @@ npm run bench
 
 ```bash
 # Build all programs
-cargo build-sbf --manifest-path contracts/pfda-amm/Cargo.toml
+cargo build-sbf --manifest-path legacy/pfda-amm/Cargo.toml
 cargo build-sbf --manifest-path contracts/pfda-amm-3/Cargo.toml
-cargo build-sbf --manifest-path contracts/axis-g3m/Cargo.toml
+cargo build-sbf --manifest-path legacy/axis-g3m/Cargo.toml
 cargo build-sbf --manifest-path contracts/axis-vault/Cargo.toml
 
 # Run all unit tests
-cargo test --manifest-path contracts/pfda-amm/Cargo.toml
+cargo test --manifest-path legacy/pfda-amm/Cargo.toml
 cargo test --manifest-path contracts/pfda-amm-3/Cargo.toml
-cargo test --manifest-path contracts/axis-g3m/Cargo.toml
+cargo test --manifest-path legacy/axis-g3m/Cargo.toml
 cargo test --manifest-path contracts/axis-vault/Cargo.toml
 
 # Binaries are at:
-#   contracts/pfda-amm/target/deploy/pfda_amm.so
+#   legacy/pfda-amm/target/deploy/pfda_amm.so
 #   contracts/pfda-amm-3/target/deploy/pfda_amm_3.so
-#   contracts/axis-g3m/target/deploy/axis_g3m.so
+#   legacy/axis-g3m/target/deploy/axis_g3m.so
 #   contracts/axis-vault/target/deploy/axis_vault.so
 ```
 
@@ -268,7 +268,7 @@ solana-keygen new --outfile my-g3m.json --no-bip39-passphrase
 
 # Deploy (requires ~1 SOL per program)
 solana program deploy contracts/pfda-amm-3/target/deploy/pfda_amm_3.so --program-id my-pfda3.json
-solana program deploy contracts/axis-g3m/target/deploy/axis_g3m.so --program-id my-g3m.json
+solana program deploy legacy/axis-g3m/target/deploy/axis_g3m.so --program-id my-g3m.json
 
 # Update PROGRAM_ID in the client scripts to match your new IDs
 ```

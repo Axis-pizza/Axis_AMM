@@ -232,6 +232,15 @@ function labelForCode(hex: string): string | null {
     "0x234a": "axis-vault: TvlCapExceeded",            // 9034
     "0x234b": "axis-vault: InvalidCapDecrease",        // 9035
     "0x234c": "axis-vault: ExcessVaultDrain",          // 9036
+    "0x234d": "axis-vault: InvalidMetaplexProgram",    // 9037
+    "0x234e": "axis-vault: InvalidMetadataPda",        // 9038
+    "0x234f": "axis-vault: InvalidUri",                // 9039
+    "0x2350": "axis-vault: TurnoverExceeded (rebalance over per-window 20% cap)", // 9040
+    "0x2351": "axis-vault: InvalidVaultIndex",         // 9041
+    "0x2352": "axis-vault: WeightDeltaExceeded (>20% move in one proposal)", // 9042
+    "0x2353": "axis-vault: TimelockNotElapsed (weight proposal still maturing)", // 9043
+    "0x2354": "axis-vault: NoPendingProposal",         // 9044
+    "0x2355": "axis-vault: InvalidRebalanceState",     // 9045
     // pfda-amm-3 — PfdaError = 8000 + variant_index
     "0x1f40": "pfda-amm-3: InvalidDiscriminator",       // 8000
     "0x1f41": "pfda-amm-3: ReentrancyDetected",         // 8001

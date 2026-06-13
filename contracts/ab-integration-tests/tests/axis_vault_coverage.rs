@@ -848,3 +848,93 @@ fn create_etf_rejects_invalid_utf8_name() {
     .expect("non-UTF-8 name should reject");
     assert_custom_err(&err, ERR_INVALID_NAME, "non-UTF-8 name");
 }
+
+// ─── Withdraw per-token slippage guard (M3) ─────────────────────────────
+
+const ERR_SLIPPAGE_EXCEEDED: u32 = 9015;
+
+/// Build a Withdraw (disc=2) instruction.
+/// New layout: [2][burn_amount u64][name_len u8][name][min_out u64 × N]
+#[allow(clippy::too_many_arguments)]
+fn withdraw_ix(
+    withdrawer: Address,
+    etf_state: Address,
+    etf_mint: Address,
+    withdrawer_etf_ata: Address,
+    treasury_etf_ata: Address,
+    vaults: &[Address],
+    user_basket_atas: &[Address],
+    name: &[u8],
+    burn_amount: u64,
+    min_outs: &[u64],
+) -> Instruction {
+    let mut data = vec![2u8]; // disc = 2 (Withdraw)
+    data.extend_from_slice(&burn_amount.to_le_bytes());
+    data.push(name.len() as u8);
+    data.extend_from_slice(name);
+    for &m in min_outs {
+        data.extend_from_slice(&m.to_le_bytes());
+    }
+
+    let mut accts = vec![
+        AccountMeta::new(withdrawer, true),
+        AccountMeta::new(etf_state, false),
+        AccountMeta::new(etf_mint, false),
+        AccountMeta::new(withdrawer_etf_ata, false),
+        AccountMeta::new_readonly(token_program_id(), false),
+        AccountMeta::new(treasury_etf_ata, false),
+    ];
+    // Vault accounts (source), then user basket ATAs (destination)
+    for v in vaults {
+        accts.push(AccountMeta::new(*v, false));
+    }
+    for u in user_basket_atas {
+        accts.push(AccountMeta::new(*u, false));
+    }
+
+    Instruction { program_id: axis_vault_id(), accounts: accts, data }
+}
+
+/// M3 regression: per-token slippage guard rejects when any single
+/// token's expected output falls below its individual floor.
+///
+/// Fixture: 3-token basket, total_supply = 10_000_000, each vault = 1_000_000.
+/// burn_amount = 1_000_000 → effective_burn ≈ 997_000 (fee 30bps)
+/// per_vault_amount[i] = 1_000_000 * 997_000 / 10_000_000 = 99_700 each.
+/// Setting min_out[0] = 99_701 forces SlippageExceeded (9015).
+#[test]
+fn withdraw_rejects_per_token_slippage() {
+    require_fixture!(AXIS_VAULT_SO);
+    let DepositFixture {
+        mut svm, payer, etf_state, etf_mint, treasury: _,
+        basket_mints: _, vaults, user_basket_atas, user_etf_ata,
+        treasury_etf_ata, name,
+    } = match seed_deposit(3, false, 10_000_000) {
+        Some(f) => f, None => return,
+    };
+
+    // Give the withdrawer enough ETF tokens to attempt the burn.
+    // Re-seed the ATA with 1_000_000 ETF units (owner = payer).
+    create_token_account(&mut svm, user_etf_ata, &etf_mint, &payer.pubkey(), 1_000_000);
+
+    // burn_amount = 1_000_000, effective_burn = 1_000_000 - 300 = 997_000
+    // per_vault_amount[i] = vault_balance * effective_burn / total_supply
+    //                      = 1_000_000 * 997_000 / 10_000_000 = 99_700
+    // Set min_out[0] = 99_701 → one token above achievable → SlippageExceeded.
+    let burn_amount = 1_000_000u64;
+    let min_outs = [99_701u64, 0u64, 0u64];
+
+    let err = send_tx(
+        &mut svm,
+        withdraw_ix(
+            payer.pubkey(), etf_state, etf_mint,
+            user_etf_ata, treasury_etf_ata,
+            &vaults, &user_basket_atas, &name,
+            burn_amount, &min_outs,
+        ),
+        &payer,
+    )
+    .err()
+    .expect("per-token slippage floor must reject");
+    assert_custom_err(&err, ERR_SLIPPAGE_EXCEEDED, "per-token slippage min_out[0] exceeded");
+}

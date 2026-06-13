@@ -105,7 +105,7 @@ The Python/Rust simulation harness that generates the LVR P&L tables in `README.
 
 ### D1. `axis-g3m` disc=4 `RebalanceViaJupiter` (real Jupiter CPI)
 
-**Status.** Code exists in `contracts/axis-g3m/src/jupiter.rs:78-307`. Has a structural design issue: the CPI metas builder auto-prepends vault accounts at slots 0–N, but Jupiter V6's swap-instruction layout expects Token Program at slot 0 and signer at slot 1 (per `test/fixtures/jupiter/sol-usdc-100m.json`). The two layouts collide, so a real Jupiter CPI through this path will fail.
+**Status.** Code exists in `legacy/axis-g3m/src/jupiter.rs:78-307`. Has a structural design issue: the CPI metas builder auto-prepends vault accounts at slots 0–N, but Jupiter V6's swap-instruction layout expects Token Program at slot 0 and signer at slot 1 (per `test/fixtures/jupiter/sol-usdc-100m.json`). The two layouts collide, so a real Jupiter CPI through this path will fail.
 
 **Path to v1.1.** Refactor `process_rebalance_via_jupiter` to mirror `axis-vault/src/jupiter.rs::invoke_jupiter_leg` (caller controls full account order, no auto-prepend). Re-record the route fixture with `userPublicKey = pool PDA` so source/dest ATAs are the pool's vaults. Wire the e2e in `test/e2e/axis-g3m/axis-g3m.jupiter-fork-disc4.e2e.ts`.
 
@@ -193,10 +193,10 @@ Specific high-priority modules:
 
 ### What we do NOT want audited (out of scope)
 
-- `contracts/axis-g3m/**` — research-only, not shipped
-- `contracts/pfda-amm/**` — legacy regression code, not shipped
+- `legacy/axis-g3m/**` — research-only, not shipped
+- `legacy/pfda-amm/**` — legacy regression code, not shipped
 - `contracts/ab-integration-tests/**` — test code, not shipped
-- `solana-tfmm-rs/**` — off-chain simulator, not on Solana
+- `legacy/solana-tfmm-rs/**` — off-chain simulator, not on Solana
 - `test/**` — TypeScript test code, not on Solana
 - `scripts/**` — ops tooling, not on Solana
 - `.github/workflows/**` — CI configuration

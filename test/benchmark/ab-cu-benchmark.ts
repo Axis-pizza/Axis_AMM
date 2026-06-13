@@ -16,8 +16,8 @@
  * Prerequisites:
  *   solana-test-validator running with both programs loaded:
  *   solana-test-validator \
- *     --bpf-program CSBgQGeBTiAu4a9Kgoas2GyR8wbHg5jxctQjq3AenKk ../contracts/pfda-amm/target/deploy/pfda_amm.so \
- *     --bpf-program 65aE9QdVz5bapV19BGt5cyTgVitYpekGwusRoQEovNUi ../contracts/axis-g3m/target/deploy/axis_g3m.so \
+ *     --bpf-program CSBgQGeBTiAu4a9Kgoas2GyR8wbHg5jxctQjq3AenKk ../legacy/pfda-amm/target/deploy/pfda_amm.so \
+ *     --bpf-program 65aE9QdVz5bapV19BGt5cyTgVitYpekGwusRoQEovNUi ../legacy/axis-g3m/target/deploy/axis_g3m.so \
  *     --reset
  */
 

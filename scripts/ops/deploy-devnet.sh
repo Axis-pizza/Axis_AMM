@@ -102,7 +102,7 @@ done
 PROGRAMS_CANONICAL=(
   "axis-vault|DeeUnCHcnPG8arbjGTLhTKeDhpPUBper3TDrpFPHnCwy|contracts/axis-vault/target/deploy/axis_vault.so|contracts/axis-vault/src"
   "pfda-amm-3|DbAPmgkrpCCZrpBMv5x1ye6nJUreqY313SuQjZsMyjEf|contracts/pfda-amm-3/target/deploy/pfda_amm_3.so|contracts/pfda-amm-3/src"
-  "pfda-amm|CSBgQGeBTiAu4a9Kgoas2GyR8wbHg5jxctQjq3AenKk|contracts/pfda-amm/target/deploy/pfda_amm.so|contracts/pfda-amm/src"
+  "pfda-amm|CSBgQGeBTiAu4a9Kgoas2GyR8wbHg5jxctQjq3AenKk|legacy/pfda-amm/target/deploy/pfda_amm.so|legacy/pfda-amm/src"
 )
 #
 # FRESH (--fresh): first-time deploy using the locally checked-in
@@ -119,8 +119,8 @@ PROGRAMS_CANONICAL=(
 PROGRAMS_FRESH=(
   "axis-vault|contracts/axis-vault/target/deploy/axis_vault-keypair.json|contracts/axis-vault/target/deploy/axis_vault.so|contracts/axis-vault/src"
   "pfda-amm-3|contracts/pfda-amm-3/target/deploy/pfda_amm_3-keypair.json|contracts/pfda-amm-3/target/deploy/pfda_amm_3.so|contracts/pfda-amm-3/src"
-  "pfda-amm|contracts/pfda-amm/target/deploy/pfda_amm-keypair.json|contracts/pfda-amm/target/deploy/pfda_amm.so|contracts/pfda-amm/src"
-  "axis-g3m|contracts/axis-g3m/target/deploy/axis_g3m-keypair.json|contracts/axis-g3m/target/deploy/axis_g3m.so|contracts/axis-g3m/src"
+  "pfda-amm|legacy/pfda-amm/target/deploy/pfda_amm-keypair.json|legacy/pfda-amm/target/deploy/pfda_amm.so|legacy/pfda-amm/src"
+  "axis-g3m|legacy/axis-g3m/target/deploy/axis_g3m-keypair.json|legacy/axis-g3m/target/deploy/axis_g3m.so|legacy/axis-g3m/src"
 )
 # axis-g3m is bundled into the fresh manifest (but not canonical, since
 # its source didn't change in the pre-mainnet pass) so the kidney-owned

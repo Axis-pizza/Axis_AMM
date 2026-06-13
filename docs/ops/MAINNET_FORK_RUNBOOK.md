@@ -83,11 +83,11 @@ ALTs that Jupiter's response references.
 
 ```bash
 # 1. Make sure all programs are built
-cargo build-sbf --manifest-path contracts/axis-g3m/Cargo.toml
+cargo build-sbf --manifest-path legacy/axis-g3m/Cargo.toml
 cargo build-sbf --manifest-path contracts/pfda-amm-3/Cargo.toml
 
 # 2. Jupiter V6 binary is committed at
-#    contracts/axis-g3m/fixtures/jupiter_v6.so so step 3 below boots
+#    legacy/axis-g3m/fixtures/jupiter_v6.so so step 3 below boots
 #    offline. To refresh on a Jupiter V6 program upgrade:
 #      scripts/ops/refresh-jupiter-fixture.sh
 #    then commit the resulting .so. Don't refresh casually — Jupiter V6
@@ -96,9 +96,9 @@ cargo build-sbf --manifest-path contracts/pfda-amm-3/Cargo.toml
 
 # 3. Boot the validator with everything pre-loaded
 solana-test-validator --reset --ledger /tmp/fork-ledger \
-  --bpf-program 65aE9QdVz5bapV19BGt5cyTgVitYpekGwusRoQEovNUi contracts/axis-g3m/target/deploy/axis_g3m.so \
+  --bpf-program 65aE9QdVz5bapV19BGt5cyTgVitYpekGwusRoQEovNUi legacy/axis-g3m/target/deploy/axis_g3m.so \
   --bpf-program DbAPmgkrpCCZrpBMv5x1ye6nJUreqY313SuQjZsMyjEf contracts/pfda-amm-3/target/deploy/pfda_amm_3.so \
-  --bpf-program JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4 contracts/axis-g3m/fixtures/jupiter_v6.so \
+  --bpf-program JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4 legacy/axis-g3m/fixtures/jupiter_v6.so \
   $(cat test/fixtures/jupiter/accounts/sol-usdc-100m/clone-args.txt) \
   > /tmp/fork-validator.log 2>&1 &
 

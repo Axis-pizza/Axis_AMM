@@ -286,9 +286,11 @@ async function main() {
   const withdrawData = Buffer.concat([
     Buffer.from([2]),                     // disc = Withdraw
     u64Le(burnAmount),
-    u64Le(0n),                           // min_tokens_out (0 = no slippage check)
     Buffer.from([nameBytes.length]),
     nameBytes,
+    // per-token min_out (one u64 per basket token); 0 = no slippage floor.
+    // New layout: [burn u64][name_len u8][name][min_out u64 × token_count].
+    ...Array.from({ length: TOKEN_COUNT }, () => u64Le(0n)),
   ]);
 
   const beforeBalances: bigint[] = [];
@@ -433,9 +435,9 @@ async function main() {
     const badWithdrawData = Buffer.concat([
       Buffer.from([2]),
       u64Le(hugeAmount),
-      u64Le(0n),
       Buffer.from([nameBytes.length]),
       nameBytes,
+      ...Array.from({ length: TOKEN_COUNT }, () => u64Le(0n)),
     ]);
 
     await sendAndConfirmTransaction(conn, new Transaction().add(new TransactionInstruction({
